@@ -57,3 +57,9 @@ begin
   begin alter publication supabase_realtime add table public.jobs; exception when duplicate_object then null; end;
   begin alter publication supabase_realtime add table public.settings; exception when duplicate_object then null; end;
 end $$;
+
+-- Let signed-in users reach the tables (the security rules above still limit it to the owner).
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on public.jobs to authenticated;
+grant select, insert, update, delete on public.settings to authenticated;
+grant execute on function public.is_owner() to authenticated;

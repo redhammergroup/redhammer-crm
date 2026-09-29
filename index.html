@@ -330,6 +330,7 @@ function saveSettings(patch){
 }
 function writeErr(e){
   console.error(e);
+  if(e && e.message && navigator.onLine){ S.dbErr = e.message; S.dbOk=false; renderSoon(); toast("Didn't save: "+e.message); return; }
   S.dbOk = navigator.onLine ? S.dbOk : false; renderSoon();
   toast(navigator.onLine ? "Couldn't save that change. Try again." : "No signal. That change didn't save.");
 }
@@ -435,7 +436,9 @@ function renderNav(){
 function renderMain(){
   const m=$("#main");
   let banner="";
-  if(S.dbOk===false) banner=`<div class="banner">You're offline or the connection dropped. Changes may not save until you have signal again.</div>`;
+  if(S.dbOk===false) banner = S.dbErr
+    ? `<div class="banner"><b>Can't reach your database.</b> Send this message to Claude: <span style="user-select:text">${esc(S.dbErr)}</span></div>`
+    : `<div class="banner">You're offline or the connection dropped. Changes may not save until you have signal again.</div>`;
   if(S.view==="board") m.innerHTML = banner + boardView();
   else if(S.view==="lost") m.innerHTML = banner + lostView();
   else if(S.view==="profit") m.innerHTML = banner + profitView();
@@ -1137,7 +1140,8 @@ window.addEventListener("focus", ()=>setTimeout(checkReturn, 300));
 let channel=null;
 async function loadAll(){
   const [jr, st] = await Promise.all([ sb.from("jobs").select("id,data"), sb.from("settings").select("data").eq("id",1).maybeSingle() ]);
-  if(jr.error){ S.dbOk=false; S.ready=true; render(); toast("Couldn't load jobs: "+jr.error.message); return; }
+  if(jr.error){ S.dbOk=false; S.dbErr=jr.error.message||String(jr.error.code||"unknown"); S.ready=true; render(); return; }
+  S.dbErr="";
   const m={}; (jr.data||[]).forEach(r=>{ m[r.id]={...r.data, id:r.id}; });
   S.jobs=m; if(st.data && st.data.data) S.settings={...DEFAULT_SETTINGS, ...st.data.data};
   S.ready=true; S.dbOk=true; render();
