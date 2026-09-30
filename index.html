@@ -27,6 +27,7 @@
   --red:#A8201E; --red-deep:#8C1D1D; --red-tint:rgba(168,32,30,.09);
   --bar:#2A2A28; --bar-ink:#F5F1EA; --bar-muted:#B9B2A5;
   --good:#2E7A4C; --good-tint:rgba(46,122,76,.12); --warn:#A86A12; --warn-tint:rgba(168,106,18,.13);
+  --a15:#8A6D00; --a15-t:rgba(200,160,0,.18); --a30:#B8500A; --a30-t:rgba(214,110,20,.16); --a60:#A8201E; --a60-t:rgba(168,32,30,.13);
   --p-re:#A86A12; --p-re-t:rgba(168,106,18,.14); --p-ap:#2A5CA6; --p-ap-t:rgba(42,92,166,.12); --p-pa:#7B3D9C; --p-pa-t:rgba(123,61,156,.12);
   --shadow:0 1px 2px rgba(42,42,40,.08),0 2px 8px rgba(42,42,40,.06);
   --f-display:"Barlow Condensed","Arial Narrow",Calibri,sans-serif;
@@ -38,6 +39,7 @@
   --red:#D4463E; --red-deep:#B8322B; --red-tint:rgba(212,70,62,.16);
   --bar:#111110; --bar-ink:#F5F1EA; --bar-muted:#9C968B;
   --good:#5DB47E; --good-tint:rgba(93,180,126,.16); --warn:#E0A43E; --warn-tint:rgba(224,164,62,.16);
+  --a15:#E6C84A; --a15-t:rgba(230,200,74,.18); --a30:#F0924E; --a30-t:rgba(240,146,78,.18); --a60:#F07A70; --a60-t:rgba(240,122,112,.18);
   --p-re:#E0A43E; --p-re-t:rgba(224,164,62,.18); --p-ap:#7FA7EC; --p-ap-t:rgba(127,167,236,.18); --p-pa:#C993E6; --p-pa-t:rgba(201,147,230,.18);
   --shadow:0 1px 2px rgba(0,0,0,.4); color-scheme:dark}}
 :root[data-theme="dark"]{
@@ -45,6 +47,7 @@
   --red:#D4463E; --red-deep:#B8322B; --red-tint:rgba(212,70,62,.16);
   --bar:#111110; --bar-ink:#F5F1EA; --bar-muted:#9C968B;
   --good:#5DB47E; --good-tint:rgba(93,180,126,.16); --warn:#E0A43E; --warn-tint:rgba(224,164,62,.16);
+  --a15:#E6C84A; --a15-t:rgba(230,200,74,.18); --a30:#F0924E; --a30-t:rgba(240,146,78,.18); --a60:#F07A70; --a60-t:rgba(240,122,112,.18);
   --p-re:#E0A43E; --p-re-t:rgba(224,164,62,.18); --p-ap:#7FA7EC; --p-ap-t:rgba(127,167,236,.18); --p-pa:#C993E6; --p-pa-t:rgba(201,147,230,.18);
   --shadow:0 1px 2px rgba(0,0,0,.4); color-scheme:dark}
 html,body{height:100%}
@@ -102,6 +105,20 @@ main{padding:14px 16px calc(90px + env(safe-area-inset-bottom,0px))}
 .vh{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none}
 .filebtn{position:relative;overflow:hidden}
 .filebtn input[type=file]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:200px}
+.pill.age15{background:var(--a15-t);color:var(--a15);font-weight:700}
+.pill.age30{background:var(--a30-t);color:var(--a30);font-weight:700}
+.pill.age60{background:var(--a60-t);color:var(--a60);font-weight:700}
+.pill.attn{background:var(--a60);color:#fff;font-weight:700;letter-spacing:.02em}
+.card.attn15{box-shadow:inset 4px 0 0 var(--a15),var(--shadow)}
+.card.attn30{box-shadow:inset 4px 0 0 var(--a30),var(--shadow)}
+.card.attn60{box-shadow:inset 4px 0 0 var(--a60),var(--shadow)}
+.searchbar{display:flex;gap:8px;margin-bottom:12px}
+.searchbar input{flex:1}
+.attnbox{border:1px solid var(--line);border-left:4px solid var(--a60);background:var(--surface);border-radius:var(--r);padding:10px 12px;margin-bottom:12px}
+.attnbox summary{cursor:pointer;font-weight:700;display:flex;align-items:center;gap:8px;list-style:none}
+.attnbox summary::-webkit-details-marker{display:none}
+.attnbox .li{padding:8px 0}
+.tbadge{display:inline-block;min-width:18px;padding:1px 5px;margin-left:5px;border-radius:99px;background:var(--red);color:#fff;font-size:11px;letter-spacing:0;vertical-align:2px}
 .legend{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px}
 .card .amt{margin-left:auto;font-weight:600;font-size:14px}
 .card.stale{box-shadow:inset 3px 0 0 var(--warn),var(--shadow)}
@@ -243,6 +260,14 @@ const STALE_DAYS = 7;
 const PATHS = [["Reinspection","Reinspection","Reinspection"],["Appraisal","Appraisal","Appraisal"],["Public Adjuster","Public Adjuster","PA"]];
 const pathCls = p => "path-" + ((PATHS.find(x=>x[0]===p)||[])[2]||"");
 const pathPill = p => p ? `<span class="pill path ${pathCls(p)}">${esc(p)}</span>` : "";
+/* lead age: yellow at 15 days, orange at 30, red at 60 (open jobs only) */
+const AGE_STEPS = [60,30,15];
+const ageDays = j => Math.max(0, Math.floor((Date.now() - (j.createdAt||Date.now()))/864e5));
+const isOpen = j => !j.lost && !isClosed(j);
+const ageLevel = j => { if(!isOpen(j)) return 0; const d=ageDays(j); return AGE_STEPS.find(x=>d>=x) || 0; };
+const needsAttn = j => ageLevel(j) > (j.attnAck||0);
+const agePill = j => { const d=ageDays(j), l=ageLevel(j); return `<span class="pill ${l?"age"+l:""}">${d===0?"New today":d+(d===1?" day":" days")+" old"}</span>`; };
+const attnSort = (a,b) => (needsAttn(b)-needsAttn(a)) || (ageLevel(b)-ageLevel(a)) || (ageDays(b)-ageDays(a));
 const DRIVE = "Google Drive";
 const DEFAULT_SETTINGS = {partners:[], receiptNo:0};
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
@@ -426,7 +451,7 @@ function renderTop(){
   const titles={lost:"Lost Leads",profit:"Profit",settings:"Settings"};
   $("#top").innerHTML = `
     <div class="brand"><div class="mark" aria-hidden="true"></div><h1>Red Hammer <span>CRM</span></h1><div class="sync">${syncBadge()}</div></div>
-    ${S.view==="board" ? `<div class="trades" role="group" aria-label="Trade">${TRADES.map(([k,l])=>`<button data-act="trade" data-v="${k}" aria-pressed="${S.trade===k}">${l}</button>`).join("")}</div>`
+    ${S.view==="board" ? `<div class="trades" role="group" aria-label="Trade">${TRADES.map(([k,l])=>{ const c=Object.values(S.jobs).filter(j=>j.trade===k&&needsAttn(j)).length; return `<button data-act="trade" data-v="${k}" aria-pressed="${S.trade===k}">${l}${c?`<span class="tbadge" aria-label="${c} need attention">${c}</span>`:""}</button>`; }).join("")}</div>`
       : `<h2 class="viewtitle">${titles[S.view]}</h2>`}`;
 }
 function renderNav(){
@@ -468,23 +493,50 @@ function renderLogin(){
 
 /* ----- board ----- */
 function cardHTML(j){
-  const c = calc(j), d = daysSince(j), stale = d>=STALE_DAYS && !isClosed(j);
+  const c = calc(j), lvl = ageLevel(j), attn = needsAttn(j);
   const partner = j.partnerId ? S.settings.partners.find(p=>p.id===j.partnerId) : null;
-  return `<button class="card ${stale?"stale":""}" draggable="true" data-act="open" data-id="${esc(j.id)}">
+  return `<button class="card ${lvl?"attn"+lvl:""}" draggable="true" data-act="open" data-id="${esc(j.id)}">
+    ${attn?`<span class="meta"><span class="pill attn">Needs attention</span></span>`:""}
     <span class="nm">${esc(j.name||"No name")}</span>
     ${j.address?`<span class="ad">${esc(j.address)}</span>`:""}
     <span class="meta">
-      <span class="pill ${stale?"stale":d<=1?"fresh":""}">${d===0?"Today":d+"d ago"}</span>
+      ${agePill(j)}
       ${j.trade==="roofing"?pathPill(j.claimPath):""}
       ${partner?`<span class="pill partner">${esc(partner.name)}</span>`:j.source?`<span class="pill">${esc(j.source)}</span>`:""}
       ${c.contract?`<span class="amt num">${money(c.contract)}</span>`:""}
     </span></button>`;
 }
 function boardView(){
-  const jobs = Object.values(S.jobs).filter(j=>j.trade===S.trade && !j.lost);
   if(!S.ready && S.dbOk!==false) return `<div class="emptybox"><b>Loading your jobs…</b></div>`;
+  return `<div class="searchbar"><input class="input" id="jobSearch" type="search" placeholder="Search name, phone, address, claim #" value="${esc(S.search||"")}" aria-label="Search customers" autocomplete="off"></div>
+    <div id="boardArea">${boardArea()}</div>`;
+}
+function boardArea(){ return (S.search||"").trim() ? searchResults() : attentionBox() + boardCols(); }
+function searchResults(){
+  const q=(S.search||"").trim().toLowerCase(), qd=q.replace(/\D/g,"");
+  const hits=Object.values(S.jobs).filter(j=>{
+    const hay=[j.name,j.address,j.email,j.claimNo,j.carrier,j.source].join(" ").toLowerCase();
+    return hay.includes(q) || (qd.length>=3 && digits(j.phone).replace(/\D/g,"").includes(qd));
+  }).sort((a,b)=>(a.lost-b.lost)||String(a.name).localeCompare(String(b.name)));
+  if(!hits.length) return `<div class="emptybox"><b>No customers match "${esc(S.search.trim())}"</b>Search checks every board and Lost Leads.</div>`;
+  return `<div class="panel list">${hits.map(j=>`<div class="li" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer">
+    <div class="grow"><div class="t">${esc(j.name||"No name")}</div>
+    <div class="s">${esc(tradeName(j.trade))} · ${j.lost?"Lost":esc(j.stage)}${j.phone?" · "+esc(j.phone):""}${j.address?" · "+esc(j.address):""}</div></div>
+    ${isOpen(j)?agePill(j):""}</div>`).join("")}</div>`;
+}
+function attentionBox(){
+  const list=Object.values(S.jobs).filter(j=>j.trade===S.trade && needsAttn(j)).sort(attnSort);
+  if(!list.length) return "";
+  return `<details class="attnbox" open><summary><span class="pill attn">${list.length}</span> ${list.length===1?"Lead needs":"Leads need"} attention</summary>
+    <div class="list" style="margin-top:6px">${list.map(j=>`<div class="li">
+      <div class="grow" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer"><div class="t">${esc(j.name||"No name")}</div><div class="s">${esc(j.stage)}${j.phone?" · "+esc(j.phone):""}</div></div>
+      ${agePill(j)}<button class="btn small" data-act="ackAttn" data-id="${esc(j.id)}">Handled</button></div>`).join("")}</div>
+    <p class="small muted" style="margin:6px 0 0">Logging a call, email or note also clears it until the next milestone (15, 30, 60 days).</p></details>`;
+}
+function boardCols(){
+  const jobs = Object.values(S.jobs).filter(j=>j.trade===S.trade && !j.lost);
   const cols = STAGES[S.trade].map(st=>{
-    const list = jobs.filter(j=>j.stage===st).sort((a,b)=>(b.lastContact||b.createdAt)-(a.lastContact||a.createdAt));
+    const list = jobs.filter(j=>j.stage===st).sort((a,b)=>attnSort(a,b) || ((b.lastContact||b.createdAt)-(a.lastContact||a.createdAt)));
     const sum = list.reduce((a,j)=>a+n(j.contract),0);
     return `<section class="col" data-stage="${esc(st)}" aria-label="${esc(st)}">
       <div class="colhead"><h2>${esc(st)}</h2><span class="ct">${list.length}</span>${sum?`<span class="sum num">${money(sum)}</span>`:""}</div>
@@ -492,6 +544,7 @@ function boardView(){
     </section>`;
   }).join("");
   return `<div class="board" id="board">${cols}</div>
+    <div class="legend small muted">Lead age: <span class="pill age15">15+ days</span><span class="pill age30">30+ days</span><span class="pill age60">60+ days</span></div>
     ${S.trade==="roofing"?`<div class="legend small muted">Denied claims: ${PATHS.map(p=>pathPill(p[0])).join("")}</div>`:""}
     <p class="small muted" style="margin:10px 0 0">Swipe for more stages. Drag cards between columns on a computer, or open a job to move it.</p>`;
 }
@@ -620,6 +673,7 @@ function jobInfo(j){
   </div>
   <div class="panel contact">
     <h3 class="sec">Contact <span class="r small muted" style="font-family:var(--f-body);letter-spacing:0;text-transform:none;font-weight:400">last contact ${daysSince(j)===0?"today":daysSince(j)+" days ago"}</span></h3>
+    <div class="row" style="gap:6px">${isOpen(j)?agePill(j):`<span class="pill">${ageDays(j)} days since added</span>`}${needsAttn(j)?`<span class="pill attn">Needs attention</span><button class="btn small" data-act="ackAttn">Mark handled</button>`:""}</div>
     ${j.phone?`<div class="cline"><span class="val num">${esc(j.phone)}</span>
       <a class="btn primary small" href="tel:${esc(digits(j.phone))}" data-act="callStart">Call</a>
       <a class="btn small" href="sms:${esc(digits(j.phone))}">Text</a>
@@ -799,7 +853,7 @@ function contactLog(kind){
       const out=picked(box,"out"), min=box.querySelector("#cl-min")?.value, note=box.querySelector("#cl-note").value.trim();
       const text=(isCall?"Call: ":"Email: ")+out+(min?` (${min} min)`:"")+(note?"\n"+note:"");
       const id=j.id;
-      mutateJob(id, x=>{ x.notes=x.notes||[]; x.notes.push({id:rid(), t:Date.now(), kind:isCall?"call":"email", text}); x.lastContact=Date.now(); });
+      mutateJob(id, x=>{ x.notes=x.notes||[]; x.notes.push({id:rid(), t:Date.now(), kind:isCall?"call":"email", text}); x.lastContact=Date.now(); x.attnAck=Math.max(x.attnAck||0, ageLevel(x)); });
       closeModal(); toast("Logged");
     });
   });
@@ -1039,6 +1093,8 @@ const ACT = {
     mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
   },
   setPath:b=>setPath(S.openJob, b.dataset.v),
+  ackAttn:b=>{ const id=b.dataset.id||S.openJob, j=S.jobs[id]; if(!j) return; const l=ageLevel(j);
+    mutateJob(id, x=>{ x.attnAck=Math.max(x.attnAck||0,l); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"system",text:`Marked handled at ${ageDays(x)} days old`}); }); toast("Cleared until "+(l<60?(l===15?"30":"60")+" days":"it closes")); },
   reopen:b=>{
     const id=b.dataset.id;
     mutateJob(id, x=>{ x.lost=false; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Reopened from Lost Leads"}); x.lastContact=Date.now(); });
@@ -1047,7 +1103,7 @@ const ACT = {
   addNote:()=>{
     const ta=$("#noteText"), text=ta.value.trim(); if(!text) return;
     const id=S.openJob; ta.value=""; ta.blur();
-    mutateJob(id, x=>{ x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"note",text}); x.lastContact=Date.now(); });
+    mutateJob(id, x=>{ x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"note",text}); x.lastContact=Date.now(); x.attnAck=Math.max(x.attnAck||0, ageLevel(x)); });
   },
   delItem:b=>{
     const id=S.openJob, list=b.dataset.list, item=b.dataset.item;
@@ -1113,6 +1169,7 @@ async function uploadDoc(input){
 
 /* lost search: update the list only, keep focus */
 document.addEventListener("input", e=>{
+  if(e.target.id==="jobSearch"){ S.search=e.target.value; const a=$("#boardArea"); if(a) a.innerHTML=boardArea(); return; }
   if(e.target.id==="lostSearch"){ S.lostQuery=e.target.value; const l=$("#lostList"); if(l) l.innerHTML=lostRows(); }
 });
 
