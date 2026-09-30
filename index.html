@@ -296,14 +296,14 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Sep 30 · Tony portal 2";
+const APP_VERSION = "Sep 30 · Tony portal 3";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
 const S = {
   jobs:{}, settings:{...DEFAULT_SETTINGS}, trade:"roofing", view:"board",
   openJob:null, jobTab:"info", period:"month", lostQuery:"",
-  ready:false, dbOk:null, authReady:false, srcYear:new Date().getFullYear(), srcFilter:"", isOwner:true, pendingContact:null, mode:"", me:null, ptab:"leads"
+  ready:false, dbOk:null, authReady:false, srcYear:new Date().getFullYear(), srcFilter:"", isOwner:true, pendingContact:null, mode:"", me:null, ptab:"new"
 };
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {auth:{persistSession:true, autoRefreshToken:true}});
 let session=null;
@@ -325,6 +325,15 @@ const digits = p => String(p||"").replace(/[^\d+]/g,"");
 const tradeName = t => (TRADES.find(x=>x[0]===t)||[])[1] || t;
 
 /* a job has a profit split only when its lead source is a partner (e.g. Tony) */
+const ROOF_AGES = ["Under 5 years","5–10 years","10–15 years","15–20 years","20+ years","Not sure"];
+const paidOut = j => (j.partnerPayouts||[]).reduce((a,p)=>a+n(p.amount),0);
+function partnerTotals(jobs){
+  const t={earned:0, paid:0, owed:0, pipeShare:0, pipeRevenue:0, closedRevenue:0, collected:0, closed:0, open:0};
+  jobs.forEach(j=>{ const c=calc(j), po=paidOut(j); t.paid+=po; t.collected+=c.paid;
+    if(!j.lost && isClosed(j)){ t.earned+=c.cut; t.closedRevenue+=c.contract; t.closed++; }
+    else if(isOpen(j)){ t.pipeShare+=c.cut; t.pipeRevenue+=c.contract; t.open++; } });
+  t.owed=Math.max(0, t.earned-t.paid); return t;
+}
 const TONY_DEFAULT = {id:"tony", name:"Tony", pct:15, basis:"profit"};
 function partnerFor(j){
   const src = String(srcLabel(j)).trim().toLowerCase();
@@ -636,7 +645,7 @@ function renderPartner(){
   $("#nav").hidden=true; $("#fab").hidden=true;
   const me=S.me, name=(me&&me.name)||"Partner";
   $("#top").innerHTML = `<div class="brand"><div class="mark" aria-hidden="true"></div><h1>Red Hammer <span>Leads</span></h1><div class="sync">${syncBadge()}</div></div>
-    ${S.mode==="partner"?`<div class="trades" role="group" aria-label="Sections"><button data-act="ptab" data-v="leads" aria-pressed="${S.ptab==="leads"}">My leads</button><button data-act="ptab" data-v="new" aria-pressed="${S.ptab==="new"}">Submit a lead</button></div>`:`<div style="height:12px"></div>`}`;
+    ${S.mode==="partner"?`<div class="trades" role="group" aria-label="Sections"><button data-act="ptab" data-v="new" aria-pressed="${S.ptab==="new"}">Submit a lead</button><button data-act="ptab" data-v="leads" aria-pressed="${S.ptab==="leads"}">My leads</button></div>`:`<div style="height:12px"></div>`}`;
   if(S.mode==="none"){
     $("#main").innerHTML=`<div class="panel stack" style="max-width:460px;margin:24px auto"><h3 class="sec">Account not set up yet</h3>
       <p style="margin:0">You're signed in as ${esc(session?.user?.email||"")}, but this login isn't linked to Red Hammer yet. Ask Gabriel to add your email in the CRM.</p>
@@ -646,19 +655,27 @@ function renderPartner(){
   if(!S.ready){ $("#main").innerHTML=`<div class="emptybox"><b>Loading your leads…</b></div>`; return; }
   const jobs=Object.values(S.jobs).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
   if(S.ptab==="new"){ renderPartnerForm(jobs); $("#sheet").innerHTML=""; return; }
-  const earned=jobs.filter(j=>!j.lost&&isClosed(j)).reduce((a,j)=>a+calc(j).cut,0);
-  const pending=jobs.filter(j=>isOpen(j)).reduce((a,j)=>a+calc(j).cut,0);
+  const t=partnerTotals(jobs);
   const basis=me.basis==="contract"?"contract price":"profit";
   $("#main").innerHTML = `<div class="stack">
     <div class="phero">
-      <div><div class="label" style="color:var(--bar-muted)">${esc(name)}'s earnings · closed jobs</div><div class="v num">${money(earned)}</div>
+      <div><div class="label" style="color:var(--bar-muted)">Paid to ${esc(name)}</div><div class="v num">${money(t.paid)}</div>
       <div class="small" style="color:var(--bar-muted)">Your split: ${n(me.pct)}% of ${basis}</div></div>
-      <div class="kv num"><div><span>Leads sent</span><b>${jobs.length}</b></div><div><span>Closed</span><b>${jobs.filter(j=>!j.lost&&isClosed(j)).length}</b></div><div><span>Pending share</span><b>${money(pending)}</b></div></div>
+      <div class="kv num"><div><span>Owed to you</span><b>${money(t.owed)}</b></div><div><span>In the pipeline</span><b>${money(t.pipeShare)}</b></div><div><span>Earned total</span><b>${money(t.earned)}</b></div></div>
+    </div>
+    <div class="panel stack"><h3 class="sec">Revenue from your leads</h3>
+      <div class="list num">
+        <div class="li"><div class="grow">Closed jobs <span class="muted small">${t.closed}</span></div><b>${money(t.closedRevenue)}</b></div>
+        <div class="li"><div class="grow">Collected from customers</div><b>${money(t.collected)}</b></div>
+        <div class="li"><div class="grow">Still in the pipeline <span class="muted small">${t.open} open job${t.open===1?"":"s"}</span></div><b>${money(t.pipeRevenue)}</b></div>
+        <div class="li"><div class="grow">Leads sent</div><b>${jobs.length}</b></div>
+      </div>
+      <p class="small muted" style="margin:0">Your share is earned when a job is complete. "In the pipeline" is your expected share on open jobs, based on the price and expenses so far.</p>
     </div>
     ${jobs.length?`<div class="panel list">${jobs.map(j=>{ const c=calc(j); return `<div class="li" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer">
       <div class="grow"><div class="t">${esc(j.name||"No name")}</div>
       <div class="s">${j.lost?"Closed out":esc(j.stage)}${j.appointmentAt?" · 📅 "+esc(fdtLong(j.appointmentAt)):""}${j.address?" · "+esc(j.address):""}</div></div>
-      <div style="text-align:right"><b class="num">${c.contract?money(c.cut):"—"}</b><div class="s small muted">your share</div></div></div>`; }).join("")}</div>`
+      <div style="text-align:right"><b class="num">${c.contract?money(c.cut):"—"}</b><div class="s small muted">${paidOut(j)>=c.cut&&c.cut>0?"paid":paidOut(j)>0?money(paidOut(j))+" paid":"your share"}</div></div></div>`; }).join("")}</div>`
       :`<div class="emptybox"><b>No leads yet</b>Tap <b>Submit a lead</b> to send Gabriel your first one.</div>`}
     <div class="row"><button class="btn" data-act="signOut">Sign out</button></div>
   </div>`;
@@ -674,6 +691,7 @@ function renderPartnerForm(jobs){
         <div class="field"><label for="pl-email">Email (optional)</label><input class="input" id="pl-email" type="email"></div></div>
       <div class="field"><label for="pl-address">Property address</label><input class="input" id="pl-address" required></div>
       <div class="field"><label for="pl-appt">Appointment date & time</label><input class="input" id="pl-appt" type="datetime-local" required></div>
+      <div class="field"><label for="pl-roofage">Age of roof</label><select class="input" id="pl-roofage" required><option value="">Pick one</option>${ROOF_AGES.map(a=>`<option>${esc(a)}</option>`).join("")}</select></div>
       <div class="grid2"><div class="field"><label for="pl-carrier">Insurance carrier (optional)</label><input class="input" id="pl-carrier"></div>
         <div class="field"><label for="pl-claim">Claim # (optional)</label><input class="input" id="pl-claim"></div></div>
       <div class="field"><label for="pl-notes">Notes for Gabriel</label><textarea class="input" id="pl-notes" placeholder="Damage, gate code, best time to call…"></textarea></div>
@@ -691,7 +709,7 @@ function renderPartnerForm(jobs){
     btn.disabled=true; btn.textContent="Submitting…";
     const now=Date.now(), who=(S.me&&S.me.name)||"Partner";
     const j={id:rid(), trade:"roofing", stage:"Lead", name:v("#pl-name"), phone:v("#pl-phone"), email:v("#pl-email"), address:v("#pl-address"),
-      source:who, sourceOther:"", partnerId:"", splitPct:null, splitBasis:"", contract:null, carrier:v("#pl-carrier"), claimNo:v("#pl-claim"),
+      source:who, sourceOther:"", partnerId:"", splitPct:null, splitBasis:"", contract:null, carrier:v("#pl-carrier"), claimNo:v("#pl-claim"), roofAge:v("#pl-roofage"),
       lost:false, lostReason:"", lostAt:null, createdAt:now, updatedAt:now, lastContact:null, closedAt:null, appointmentAt:appt, submittedBy:who, alarmFor:null,
       notes:[{id:rid(), t:now, kind:"note", text:`Submitted by ${who}`+(v("#pl-notes")?"\n"+v("#pl-notes"):"")}], expenses:[], payments:[], docs:[]};
     const topic=S.me&&S.me.notify_topic;
@@ -718,6 +736,7 @@ function renderPartnerSheet(){
         ${j.appointmentAt?`<div class="li"><div class="grow">Appointment</div><b>${esc(fdtLong(j.appointmentAt))}</b></div>`:""}
         ${j.phone?`<div class="li"><div class="grow">Phone</div><b>${esc(j.phone)}</b></div>`:""}
         ${j.address?`<div class="li"><div class="grow">Address</div><b style="text-align:right">${esc(j.address)}</b></div>`:""}
+        ${j.roofAge?`<div class="li"><div class="grow">Age of roof</div><b>${esc(j.roofAge)}</b></div>`:""}
         ${j.carrier?`<div class="li"><div class="grow">Insurance</div><b>${esc(j.carrier)}${j.claimNo?" · "+esc(j.claimNo):""}</b></div>`:""}
         <div class="li"><div class="grow">Sent</div><b>${fdate(j.createdAt)}</b></div>
       </div></div>
@@ -726,6 +745,8 @@ function renderPartnerSheet(){
         <div class="li"><div class="grow">Expenses</div><b>- ${money(c.expenses,1)}</b></div>
         <div class="li"><div class="grow">Profit</div><b>${money(c.profit,1)}</b></div>
         <div class="li"><div class="grow"><b>Your share</b> <span class="muted small">${n(c.pct)}% of ${c.basis==="contract"?"contract price":"profit"}</span></div><b>${money(c.cut,1)}</b></div>
+        <div class="li"><div class="grow">Paid to you</div><b>${money(paidOut(j),1)}</b></div>
+        ${(j.partnerPayouts||[]).map(p=>`<div class="li small"><div class="grow muted">${fdate(p.date)}${p.note?" · "+esc(p.note):""}</div><span class="muted">${money(n(p.amount),1)}</span></div>`).join("")}
       </div>
       ${ex.length?`<div class="list">${ex.map(e=>`<div class="li">${e.assetId?`<a href="${urlFor(e.assetId)||"#"}" target="_blank" rel="noopener"><img class="thumb" src="${urlFor(e.assetId)||PIXEL}" alt="Receipt"></a>`:`<div class="thumb">—</div>`}
         <div class="grow"><div class="t num">${money(n(e.amount),1)} · ${esc(e.category)}</div><div class="s">${fdate(e.date)}${e.desc?" · "+esc(e.desc):""}</div></div></div>`).join("")}</div>`:""}</div>
@@ -933,6 +954,12 @@ function profitView(){
     </div>
     ${leadSourceSection(range, pl[S.period])}
     ${partners.length?`<div class="panel stack"><h3 class="sec">Partner share · ${pl[S.period].toLowerCase()}</h3><div class="list">${partners.map(x=>`<div class="li"><div class="grow t">${esc(x.p.name)}</div><b class="num">${money(x.v)}</b></div>`).join("")}</div></div>`:""}
+    ${(()=>{ const tj=Object.values(S.jobs).filter(j=>(partnerFor(j)||{}).id==="tony"); if(!tj.length) return ""; const t=partnerTotals(tj);
+      return `<div class="panel stack"><h3 class="sec">Tony · all time</h3><div class="list num">
+        <div class="li"><div class="grow">Earned (closed jobs)</div><b>${money(t.earned)}</b></div>
+        <div class="li"><div class="grow">Paid to Tony</div><b>${money(t.paid)}</b></div>
+        <div class="li"><div class="grow"><b>Still owed</b></div><b>${money(t.owed)}</b></div>
+        <div class="li"><div class="grow">His share in the pipeline</div><b>${money(t.pipeShare)}</b></div></div></div>`; })()}
     <div class="panel stack"><h3 class="sec">Open jobs</h3>
       <div class="grid2 num"><div><div class="label">In the pipeline</div><b style="font-size:20px">${money(pipe.contract)}</b><div class="small muted">${open.length} open job${open.length===1?"":"s"}</div></div>
       <div><div class="label">Expected profit</div><b style="font-size:20px">${money(pipe.net)}</b><div class="small muted">after expenses so far</div></div></div>
@@ -1044,7 +1071,8 @@ function jobInfo(j){
     ${j.trade==="roofing"?`<div class="grid2">
       <div class="field"><label for="f-carrier">Insurance carrier</label><input class="input" id="f-carrier" data-field="carrier" value="${esc(j.carrier)}"></div>
       <div class="field"><label for="f-claimNo">Claim number</label><input class="input" id="f-claimNo" data-field="claimNo" value="${esc(j.claimNo)}"></div>
-    </div>`:""}
+    </div>
+    <div class="field"><label for="f-roofAge">Age of roof</label>${sel("roofAge",[["","Pick one"],...ROOF_AGES,...(j.roofAge&&!ROOF_AGES.includes(j.roofAge)?[j.roofAge]:[])],j.roofAge)}</div>`:""}
     <div class="field"><label for="f-trade">Board</label>${sel("trade",TRADES,j.trade)}</div>
   </div>
   <div class="panel stack"><h3 class="sec">Estimate</h3>
@@ -1083,7 +1111,16 @@ function jobMoney(j,c){
     <div class="grid2">
       <div class="field"><label for="f-splitPct">Split %</label><input class="input num" id="f-splitPct" data-field="splitPct" type="number" inputmode="decimal" min="0" max="100" step="0.5" value="${j.splitPct??""}" placeholder="Default"></div>
       <div class="field"><label for="f-splitBasis">Comes off</label>${sel("splitBasis",[["","Default"],["profit","Profit"],["contract","Contract price"]],j.splitBasis||"")}</div>
-    </div></div>`:""}
+    </div>
+    <div class="list num">
+      <div class="li"><div class="grow">${esc(p?p.name:"Partner")}'s share</div><b>${money(c.cut,1)}</b></div>
+      <div class="li"><div class="grow">Paid to ${esc(p?p.name:"partner")}</div><b>${money(paidOut(j),1)}</b></div>
+      ${(j.partnerPayouts||[]).map(x=>`<div class="li small"><div class="grow muted">${fdate(x.date)}${x.note?" · "+esc(x.note):""}</div><span class="muted">${money(n(x.amount),1)}</span>
+        ${S.isOwner?`<button class="btn small ghost danger" data-act="delItem" data-list="partnerPayouts" data-item="${esc(x.id)}" aria-label="Delete payout">✕</button>`:""}</div>`).join("")}
+      <div class="tot"><span>Still owed</span><span>${money(Math.max(0,c.cut-paidOut(j)),1)}</span></div>
+    </div>
+    <button class="btn" data-act="addPayout">+ Record payout to ${esc(p?p.name:"partner")}</button>
+    </div>`:""}
   <div class="panel stack">
     <h3 class="sec">Expenses & receipts <span class="r num" style="font-family:var(--f-body);letter-spacing:0">${money(c.expenses,1)}</span></h3>
     <button class="btn primary block" data-act="addExpense">+ Add expense</button>
@@ -1434,6 +1471,22 @@ const ACT = {
     mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
   },
   setPath:b=>setPath(S.openJob, b.dataset.v),
+  addPayout:()=>{
+    const id=S.openJob, j=S.jobs[id]; if(!j) return; const c=calc(j), who=(c.partner||{}).name||"partner";
+    openModal(`<h2>Record payout to ${esc(who)}</h2>
+      <p class="muted" style="margin:0">Share ${money(c.cut,1)} · already paid ${money(paidOut(j),1)}</p>
+      <div class="field"><label for="po-amt">Amount paid</label><input class="input num" id="po-amt" type="number" inputmode="decimal" step="0.01" min="0" value="${Math.max(0,c.cut-paidOut(j)).toFixed(2)}"></div>
+      <div class="grid2"><div class="field"><label for="po-date">Date</label><input class="input" id="po-date" type="date" value="${today()}" data-nofocus="1"></div>
+      <div class="field"><label for="po-note">Note (e.g. Zelle, check #)</label><input class="input" id="po-note" data-nofocus="1"></div></div>
+      <div class="row"><button class="btn primary" id="po-save">Save payout</button><button class="btn ghost" data-act="closeModal">Cancel</button></div>`, box=>{
+      box.querySelector("#po-save").addEventListener("click",()=>{
+        const amt=n(box.querySelector("#po-amt").value); if(!amt){ toast("Type the amount"); return; }
+        const item={id:rid(), amount:amt, date:dateVal(box.querySelector("#po-date").value), note:box.querySelector("#po-note").value.trim()};
+        mutateJob(id, x=>{ x.partnerPayouts=x.partnerPayouts||[]; x.partnerPayouts.push(item); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"system",text:`Paid ${who} ${money(amt,1)}${item.note?" ("+item.note+")":""}`}); });
+        closeModal(); toast("Payout recorded");
+      });
+    });
+  },
   addPayPhoto:b=>{
     const id=S.openJob, pid=b.dataset.item;
     openModal(`<h2>Add check or payment photo</h2>${photoPickerHTML("app","check")}
@@ -1460,7 +1513,7 @@ const ACT = {
   },
   delItem:b=>{
     const id=S.openJob, list=b.dataset.list, item=b.dataset.item;
-    const labels={expenses:"expense",payments:"payment",notes:"note",docs:"document"};
+    const labels={expenses:"expense",payments:"payment",notes:"note",docs:"document",partnerPayouts:"payout"};
     confirmBox("Delete "+labels[list]+"?", "This can't be undone. Any copy already in Google Drive stays there.", "Delete", async ()=>{
       const it=(S.jobs[id]?.[list]||[]).find(x=>x.id===item);
       await mutateJob(id, x=>{ x[list]=(x[list]||[]).filter(y=>y.id!==item); });
@@ -1632,7 +1685,7 @@ function subscribe(){
 sb.auth.onAuthStateChange((ev, sess)=>{
   const was = !!session; session = sess; S.authReady=true;
   if(sess && !was){ S.ready=false; render(); setTimeout(()=>{ loadAll(); subscribe(); }, 0); }
-  if(!sess){ S.jobs={}; S.ready=false; S.openJob=null; S.mode=""; S.me=null; S.isOwner=true; S.settings={...DEFAULT_SETTINGS}; if(channel){ sb.removeChannel(channel); channel=null; } render(); }
+  if(!sess){ S.jobs={}; S.ready=false; S.openJob=null; S.mode=""; S.me=null; S.ptab="new"; S.isOwner=true; S.settings={...DEFAULT_SETTINGS}; if(channel){ sb.removeChannel(channel); channel=null; } render(); }
 });
 window.addEventListener("online", ()=>{ if(session){ S.dbOk=true; loadAll(); } });
 window.addEventListener("offline", ()=>{ S.dbOk=false; renderSoon(); });
