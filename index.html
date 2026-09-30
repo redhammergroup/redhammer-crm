@@ -296,7 +296,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Sep 30 · Tony portal 3";
+const APP_VERSION = "Sep 30 · Tony portal 4";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -663,15 +663,7 @@ function renderPartner(){
       <div class="small" style="color:var(--bar-muted)">Your split: ${n(me.pct)}% of ${basis}</div></div>
       <div class="kv num"><div><span>Owed to you</span><b>${money(t.owed)}</b></div><div><span>In the pipeline</span><b>${money(t.pipeShare)}</b></div><div><span>Earned total</span><b>${money(t.earned)}</b></div></div>
     </div>
-    <div class="panel stack"><h3 class="sec">Revenue from your leads</h3>
-      <div class="list num">
-        <div class="li"><div class="grow">Closed jobs <span class="muted small">${t.closed}</span></div><b>${money(t.closedRevenue)}</b></div>
-        <div class="li"><div class="grow">Collected from customers</div><b>${money(t.collected)}</b></div>
-        <div class="li"><div class="grow">Still in the pipeline <span class="muted small">${t.open} open job${t.open===1?"":"s"}</span></div><b>${money(t.pipeRevenue)}</b></div>
-        <div class="li"><div class="grow">Leads sent</div><b>${jobs.length}</b></div>
-      </div>
-      <p class="small muted" style="margin:0">Your share is earned when a job is complete. "In the pipeline" is your expected share on open jobs, based on the price and expenses so far.</p>
-    </div>
+    <p class="small muted" style="margin:0">Your share is earned when a job is complete. "In the pipeline" is your expected share on open jobs.</p>
     ${jobs.length?`<div class="panel list">${jobs.map(j=>{ const c=calc(j); return `<div class="li" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer">
       <div class="grow"><div class="t">${esc(j.name||"No name")}</div>
       <div class="s">${j.lost?"Closed out":esc(j.stage)}${j.appointmentAt?" · 📅 "+esc(fdtLong(j.appointmentAt)):""}${j.address?" · "+esc(j.address):""}</div></div>
@@ -725,7 +717,7 @@ function renderPartnerSheet(){
   if(!j){ el.innerHTML=""; return; }
   const c=calc(j), me=S.me;
   const ex=[...(j.expenses||[])].sort((a,b)=>(b.date||0)-(a.date||0));
-  const notes=[...(j.notes||[])].sort((a,b)=>b.t-a.t);
+  const notes=[...(j.notes||[])].filter(x=>!(x.kind==="system" && /^Payment /.test(x.text||""))).sort((a,b)=>b.t-a.t);
   el.innerHTML=`<div class="scrim" data-act="close"></div><div class="sheet" role="dialog" aria-label="${esc(j.name)}">
     <div class="sheethead"><div class="rowtop"><button class="back" data-act="close" aria-label="Back">‹ Back</button><div class="jn">${esc(j.name||"No name")}</div><div class="tr">${j.lost?"Closed out":esc(j.stage)}</div></div>
       <div class="hero"><div class="big"><span class="v num">${money(c.cut)}</span><span class="k">your share · ${n(c.pct)}% of ${c.basis==="contract"?"contract":"profit"}</span></div>
@@ -750,17 +742,13 @@ function renderPartnerSheet(){
       </div>
       ${ex.length?`<div class="list">${ex.map(e=>`<div class="li">${e.assetId?`<a href="${urlFor(e.assetId)||"#"}" target="_blank" rel="noopener"><img class="thumb" src="${urlFor(e.assetId)||PIXEL}" alt="Receipt"></a>`:`<div class="thumb">—</div>`}
         <div class="grow"><div class="t num">${money(n(e.amount),1)} · ${esc(e.category)}</div><div class="s">${fdate(e.date)}${e.desc?" · "+esc(e.desc):""}</div></div></div>`).join("")}</div>`:""}</div>
-      ${(()=>{ const docs=[...(j.docs||[])].sort((a,b)=>b.t-a.t), pays=[...(j.payments||[])].sort((a,b)=>(b.date||0)-(a.date||0));
-        if(!docs.length && !pays.length) return "";
-        return `<div class="panel stack"><h3 class="sec">Documents & files</h3>
+      ${(()=>{ const docs=[...(j.docs||[])].sort((a,b)=>b.t-a.t);
+        if(!docs.length) return "";
+        return `<div class="panel stack"><h3 class="sec">Documents</h3>
           ${docs.length?`<div class="list">${docs.map(d=>`<div class="li">
             ${d.assetId && d.type!=="application/pdf"?`<a href="${urlFor(d.assetId)||"#"}" target="_blank" rel="noopener"><img class="thumb" src="${urlFor(d.assetId)||PIXEL}" alt=""></a>`:`<div class="thumb">${d.type==="application/pdf"?"PDF":"FILE"}</div>`}
             <div class="grow"><div class="t">${esc(d.name)}</div><div class="s">${fdate(d.t)}</div></div>
             ${d.assetId?`<a class="btn small" href="${urlFor(d.assetId)||"#"}" target="_blank" rel="noopener">Open</a>`:""}</div>`).join("")}</div>`:""}
-          ${pays.length?`<div class="label" style="margin-top:4px">Payments · ${money(c.paid,1)} received</div><div class="list">${pays.map(p=>`<div class="li"><div class="grow">
-            <div class="t num">${money(n(p.amount),1)} · ${esc(p.method)}</div><div class="s">${fdate(p.date)}${p.receiptNo?" · Receipt "+esc(p.receiptNo):""}</div>
-            ${(p.photos||[]).length?`<div class="thumbs">${p.photos.map(ph=>`<a href="${urlFor(ph)||"#"}" target="_blank" rel="noopener"><img class="thumb" src="${urlFor(ph)||PIXEL}" alt="Check or payment photo"></a>`).join("")}</div>`:""}</div>
-            ${p.assetId?`<a class="btn small" href="${urlFor(p.assetId)||"#"}" target="_blank" rel="noopener">Receipt</a>`:""}</div>`).join("")}</div>`:""}
         </div>`; })()}
       ${notes.length?`<div class="panel log"><div class="list">${notes.map(x=>`<div class="li"><div class="grow"><div class="s">${fdt(x.t)}</div><div style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(x.text)}</div></div></div>`).join("")}</div></div>`:""}
     </div></div>`;
