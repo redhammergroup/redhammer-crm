@@ -292,7 +292,7 @@ const DEFAULT_SETTINGS = {partners:[], receiptNo:0};
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Sep 29 · in-app camera 2";
+const APP_VERSION = "Sep 29 · in-app camera 3";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -404,7 +404,7 @@ function openCamera(){
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ resolve(undefined); return; }
     let stream;
     try{ stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}, width:{ideal:1600}, height:{ideal:1200}}, audio:false}); }
-    catch(e){ resolve(e && e.name==="NotAllowedError" ? "denied" : undefined); return; }
+    catch(e){ window.__camErr = (e && (e.name+": "+e.message)) || "unknown"; resolve(e && e.name==="NotAllowedError" ? "denied" : undefined); return; }
     const el=document.createElement("div"); el.className="cam";
     el.innerHTML=`<video playsinline autoplay muted></video><div class="camctl"><button type="button" class="btn" data-c="x">Cancel</button><button type="button" class="shutter" data-c="snap" aria-label="Take photo"></button><span style="width:84px"></span></div>`;
     document.body.appendChild(el);
@@ -444,8 +444,9 @@ function wirePhotoPicker(box, pfx, onPhoto){
     const r = await openCamera();
     if(r instanceof Blob) return use(r);
     if(r===null) return;
-    if(r==="denied"){ msg.textContent="Camera is blocked. In Chrome tap ⋮ → Settings → Site settings → Camera and allow this site, or use Upload from gallery."; return; }
-    msg.textContent="The camera couldn't start. Close other apps and try again, or use Upload from gallery.";
+    const why = window.__camErr ? ` (${window.__camErr})` : "";
+    if(r==="denied"){ msg.textContent="Camera is blocked. In Chrome tap ⋮ → Settings → Site settings → Camera and allow this site, or use Upload from gallery."+why; return; }
+    msg.textContent="The camera couldn't start. Close other apps and try again, or use Upload from gallery."+why;
   });
 }
 const ASSET_TYPES = ["image/png","image/jpeg","image/gif","image/webp","application/pdf"];
