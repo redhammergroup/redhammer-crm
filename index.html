@@ -119,6 +119,18 @@ main{padding:14px 16px calc(90px + env(safe-area-inset-bottom,0px))}
 .attnbox summary::-webkit-details-marker{display:none}
 .attnbox .li{padding:8px 0}
 .tbadge{display:inline-block;min-width:18px;padding:1px 5px;margin-left:5px;border-radius:99px;background:var(--red);color:#fff;font-size:11px;letter-spacing:0;vertical-align:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.mchart{display:grid;grid-template-columns:repeat(12,1fr);gap:4px;height:150px;align-items:end;padding-top:18px}
+.mcol{position:relative;height:100%;display:grid;grid-template-rows:16px 1fr 16px;justify-items:center;outline:none}
+.mcol .mval{font-size:10.5px;color:var(--muted);white-space:nowrap;align-self:end}
+.mcol .mbar{align-self:end;width:min(70%,26px);background:var(--red);border-radius:4px 4px 0 0;opacity:.85}
+.mcol .mlab{font-size:12px;color:var(--muted)}
+.mcol.cur .mlab{color:var(--ink);font-weight:700}
+.mcol:hover .mbar,.mcol:focus .mbar{opacity:1}
+.mcol:hover::after,.mcol:focus::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 2px);left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);font-size:12px;padding:4px 8px;border-radius:6px;white-space:nowrap;z-index:3;pointer-events:none}
+.mcol:first-child:hover::after,.mcol:first-child:focus::after{left:0;transform:none}
+.mcol:last-child:hover::after,.mcol:last-child:focus::after{left:auto;right:0;transform:none}
+.bar:focus{outline:none}.bar:focus .fill,.bar:hover .fill{background:var(--red-deep)}
 .legend{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px}
 .card .amt{margin-left:auto;font-weight:600;font-size:14px}
 .card.stale{box-shadow:inset 3px 0 0 var(--warn),var(--shadow)}
@@ -252,7 +264,8 @@ const STAGES = {
 };
 const CLOSED = {roofing:"Complete", granite:"Paid", other:"Paid"};
 const TRADES = [["roofing","Roofing"],["granite","Granite"],["other","Other"]];
-const SOURCES = ["Sign call","Door knock","Referral","Angi","Website","Partner","Repeat customer","Other"];
+const SOURCES = ["Cold Call","Door Knock","Door Sign","Yard Sign","Referral","Tony","Angi","Google","Google Ad","Website","Craigslist","Other"];
+const srcLabel = j => j.source==="Other" ? (String(j.sourceOther||"").trim() || "Other") : (j.source || "Not set");
 const EXP_CATS = ["Materials","Sub labor","Labor","Permits","Dump fees","Equipment","Other"];
 const PAY_METHODS = ["Check","Card","Cash","Insurance check","Other"];
 const LOST_REASONS = ["Went with someone else","Insurance denied","Stopped answering","Price","Not ready yet","Other"];
@@ -279,7 +292,7 @@ const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 const S = {
   jobs:{}, settings:{...DEFAULT_SETTINGS}, trade:"roofing", view:"board",
   openJob:null, jobTab:"info", period:"month", lostQuery:"",
-  ready:false, dbOk:null, authReady:false, isOwner:true, pendingContact:null
+  ready:false, dbOk:null, authReady:false, srcYear:new Date().getFullYear(), srcFilter:"", isOwner:true, pendingContact:null
 };
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {auth:{persistSession:true, autoRefreshToken:true}});
 let session=null;
@@ -502,7 +515,7 @@ function cardHTML(j){
     <span class="meta">
       ${agePill(j)}
       ${j.trade==="roofing"?pathPill(j.claimPath):""}
-      ${partner?`<span class="pill partner">${esc(partner.name)}</span>`:j.source?`<span class="pill">${esc(j.source)}</span>`:""}
+      ${partner?`<span class="pill partner">${esc(partner.name)}</span>`:j.source?`<span class="pill">${esc(srcLabel(j))}</span>`:""}
       ${c.contract?`<span class="amt num">${money(c.contract)}</span>`:""}
     </span></button>`;
 }
@@ -569,27 +582,82 @@ function lostView(){
 }
 
 /* ----- profit ----- */
-function periodStart(p){
-  const d=new Date();
-  if(p==="month") return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
-  if(p==="year") return new Date(d.getFullYear(), 0, 1).getTime();
-  return 0;
+function periodRange(p){
+  const d=new Date(), y=d.getFullYear(), m=d.getMonth(), t=(Y,M)=>new Date(Y,M,1).getTime();
+  if(p==="month") return [t(y,m), Infinity];
+  if(p==="lastmonth") return [t(y,m-1), t(y,m)];
+  if(p==="year") return [t(y,0), Infinity];
+  if(p==="lastyear") return [t(y-1,0), t(y,0)];
+  return [0, Infinity];
+}
+const inRange = (ts,[a,b]) => ts!=null && ts>=a && ts<b;
+const kMoney = v => Math.abs(v)>=1000 ? (v<0?"-":"")+"$"+(Math.abs(v)/1000).toFixed(Math.abs(v)>=10000?0:1).replace(/\.0$/,"")+"k" : money(v);
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+/* horizontal bars, one hue, value labels in text ink */
+function hbars(rows, fmt, empty){
+  if(!rows.length) return `<p class="muted small" style="margin:0">${empty}</p>`;
+  const max=Math.max(1,...rows.map(r=>Math.abs(r.v)));
+  return `<div class="bars">${rows.map(r=>`<div class="bar" tabindex="0" title="${esc(r.tip||"")}"><div class="top2"><span>${esc(r.k)}</span><b class="num">${fmt(r.v)}</b></div>
+    <div class="track"><div class="fill" style="width:${Math.max(r.v?2:0,Math.round(Math.abs(r.v)/max*100))}%"></div></div>${r.sub?`<div class="small muted" style="margin-top:2px">${esc(r.sub)}</div>`:""}</div>`).join("")}</div>`;
+}
+/* 12-month column chart */
+function mcols(vals, fmt, label){
+  const max=Math.max(1,...vals), cur = S.srcYear===new Date().getFullYear() ? new Date().getMonth() : -1;
+  return `<div class="mchart" role="img" aria-label="${esc(label)}">${vals.map((v,i)=>`<div class="mcol ${i===cur?"cur":""}" tabindex="0" data-tip="${MONTHS[i]}: ${esc(fmt(v))}">
+      <span class="mval num">${v?esc(fmt(v)):""}</span><span class="mbar" style="height:${v?Math.max(3,Math.round(v/max*100)):0}%"></span><span class="mlab">${MONTHS[i].slice(0,1)}</span></div>`).join("")}</div>`;
+}
+function leadSourceSection(range, pl){
+  const all = Object.values(S.jobs);
+  const leads = all.filter(j=>inRange(j.createdAt, range));
+  const closed = all.filter(j=>!j.lost && isClosed(j) && inRange(j.closedAt||j.updatedAt, range));
+  const agg = {};
+  leads.forEach(j=>{ const k=srcLabel(j); (agg[k]=agg[k]||{leads:0,rev:0,net:0,jobs:0}).leads++; });
+  closed.forEach(j=>{ const k=srcLabel(j), c=calc(j); const a=(agg[k]=agg[k]||{leads:0,rev:0,net:0,jobs:0}); a.rev+=c.contract; a.net+=c.net; a.jobs++; });
+  const ent = Object.entries(agg);
+  const leadRows = ent.filter(([,a])=>a.leads).sort((x,y)=>y[1].leads-x[1].leads).map(([k,a])=>({k, v:a.leads, tip:`${k}: ${a.leads} lead${a.leads===1?"":"s"}`}));
+  const revRows = ent.filter(([,a])=>a.jobs).sort((x,y)=>y[1].rev-x[1].rev).map(([k,a])=>({k, v:a.rev, sub:`${a.jobs} closed job${a.jobs===1?"":"s"} · you kept ${money(a.net)}`, tip:`${k}: ${money(a.rev)} revenue`}));
+  /* month by month for the chosen year */
+  const years=[...new Set(all.flatMap(j=>[j.createdAt,j.closedAt]).filter(Boolean).map(t=>new Date(t).getFullYear()))];
+  const thisY=new Date().getFullYear(); if(!years.includes(thisY)) years.push(thisY); years.sort((a,b)=>b-a);
+  if(!years.includes(S.srcYear)) S.srcYear=thisY;
+  const srcs=[...new Set(all.map(srcLabel))].sort();
+  if(S.srcFilter && !srcs.includes(S.srcFilter)) S.srcFilter="";
+  const pick = j => !S.srcFilter || srcLabel(j)===S.srcFilter;
+  const ml=Array(12).fill(0), mr=Array(12).fill(0);
+  all.filter(pick).forEach(j=>{
+    if(j.createdAt){ const d=new Date(j.createdAt); if(d.getFullYear()===S.srcYear) ml[d.getMonth()]++; }
+    const ct=j.closedAt||(isClosed(j)?j.updatedAt:null);
+    if(!j.lost && isClosed(j) && ct){ const d=new Date(ct); if(d.getFullYear()===S.srcYear) mr[d.getMonth()]+=calc(j).contract; }
+  });
+  const totL=ml.reduce((a,b)=>a+b,0), totR=mr.reduce((a,b)=>a+b,0);
+  return `<div class="panel stack"><h3 class="sec">Where leads come from <span class="r small muted" style="font-family:var(--f-body);letter-spacing:0;text-transform:none;font-weight:400">${esc(pl)}</span></h3>
+      <div class="grid2" style="align-items:start;gap:18px">
+        <div class="stack" style="gap:8px"><div class="label">Leads · ${leads.length}</div>${hbars(leadRows, v=>String(v), "No leads added in this period.")}</div>
+        <div class="stack" style="gap:8px"><div class="label">Revenue · ${money(revRows.reduce((a,r)=>a+r.v,0))}</div>${hbars(revRows, v=>money(v), "No jobs closed in this period.")}</div>
+      </div>
+      <p class="small muted" style="margin:0">Leads count by the day they were added. Revenue counts closed jobs by the day they closed.</p>
+    </div>
+    <div class="panel stack"><h3 class="sec">Month by month</h3>
+      <div class="row">
+        <label class="sr" for="srcYear">Year</label><select class="input" id="srcYear" style="width:auto;flex:none">${years.map(y=>`<option ${y===S.srcYear?"selected":""}>${y}</option>`).join("")}</select>
+        <label class="sr" for="srcFilter">Lead source</label><select class="input" id="srcFilter" style="flex:1;min-width:150px"><option value="">All lead sources</option>${srcs.map(x=>`<option ${x===S.srcFilter?"selected":""}>${esc(x)}</option>`).join("")}</select>
+      </div>
+      <div><div class="label" style="margin-bottom:6px">Leads added · ${totL}</div>${mcols(ml, v=>String(v), "Leads added per month")}</div>
+      <div><div class="label" style="margin-bottom:6px">Revenue closed · ${money(totR)}</div>${mcols(mr, kMoney, "Revenue closed per month")}</div>
+    </div>`;
 }
 function profitView(){
-  const start = periodStart(S.period);
+  const range = periodRange(S.period);
   const all = Object.values(S.jobs);
-  const closed = all.filter(j=>!j.lost && isClosed(j) && (j.closedAt||j.updatedAt||0) >= start);
+  const closed = all.filter(j=>!j.lost && isClosed(j) && inRange(j.closedAt||j.updatedAt, range));
   const open = all.filter(j=>!j.lost && !isClosed(j));
   const tot = closed.reduce((a,j)=>{ const c=calc(j); a.rev+=c.contract; a.exp+=c.expenses; a.cut+=c.cut; a.net+=c.net; return a; },{rev:0,exp:0,cut:0,net:0});
   const byTrade = TRADES.map(([k,l])=>({l, v: closed.filter(j=>j.trade===k).reduce((a,j)=>a+calc(j).net,0), c: closed.filter(j=>j.trade===k).length}));
   const maxT = Math.max(1, ...byTrade.map(t=>Math.abs(t.v)));
-  const src = {};
-  closed.forEach(j=>{ const k = j.partnerId ? ((S.settings.partners.find(p=>p.id===j.partnerId)||{}).name || "Partner") : (j.source||"Not set"); src[k]=src[k]||{jobs:0,net:0}; src[k].jobs++; src[k].net+=calc(j).net; });
-  const srcRows = Object.entries(src).sort((a,b)=>b[1].net-a[1].net);
   const pipe = open.reduce((a,j)=>{ const c=calc(j); a.contract+=c.contract; a.net+=c.net; return a; },{contract:0,net:0});
   const owed = all.filter(j=>!j.lost).reduce((a,j)=>{ const c=calc(j); return a + (c.contract && c.balance>0 && c.paid>0 || isClosed(j) && c.balance>0 ? c.balance : 0); },0);
   const partners = S.settings.partners.map(p=>({p, v: closed.filter(j=>j.partnerId===p.id).reduce((a,j)=>a+calc(j).cut,0)})).filter(x=>x.v);
-  const pl = {month:"This month", year:"This year", all:"All time"};
+  const pl = {month:"This month", lastmonth:"Last month", year:"This year", lastyear:"Last year", all:"All time"};
   return `<div class="stack">
     <div class="chips" role="group" aria-label="Period">${Object.entries(pl).map(([k,l])=>`<button class="chip" data-act="period" data-v="${k}" aria-pressed="${S.period===k}">${l}</button>`).join("")}</div>
     <div class="phero">
@@ -600,9 +668,7 @@ function profitView(){
     <div class="panel stack"><h3 class="sec">By trade</h3>
       <div class="bars">${byTrade.map(t=>`<div class="bar"><div class="top2"><span>${t.l} <span class="muted small">${t.c} job${t.c===1?"":"s"}</span></span><b class="num">${money(t.v)}</b></div><div class="track"><div class="fill ${t.v<0?"negf":""}" style="width:${Math.round(Math.abs(t.v)/maxT*100)}%"></div></div></div>`).join("")}</div>
     </div>
-    <div class="panel stack"><h3 class="sec">By lead source</h3>
-      ${srcRows.length?`<div style="overflow-x:auto"><table class="table num"><thead><tr><th>Source</th><th class="r">Jobs</th><th class="r">You kept</th></tr></thead><tbody>${srcRows.map(([k,v])=>`<tr><td>${esc(k)}</td><td class="r">${v.jobs}</td><td class="r">${money(v.net)}</td></tr>`).join("")}</tbody></table></div>`:`<p class="muted small" style="margin:0">Close a job to see which lead sources pay off.</p>`}
-    </div>
+    ${leadSourceSection(range, pl[S.period])}
     ${partners.length?`<div class="panel stack"><h3 class="sec">Partner share · ${pl[S.period].toLowerCase()}</h3><div class="list">${partners.map(x=>`<div class="li"><div class="grow t">${esc(x.p.name)}</div><b class="num">${money(x.v)}</b></div>`).join("")}</div></div>`:""}
     <div class="panel stack"><h3 class="sec">Open jobs</h3>
       <div class="grid2 num"><div><div class="label">In the pipeline</div><b style="font-size:20px">${money(pipe.contract)}</b><div class="small muted">${open.length} open job${open.length===1?"":"s"}</div></div>
@@ -693,7 +759,8 @@ function jobInfo(j){
     </div>
     <div class="field"><label for="f-address">Address</label><input class="input" id="f-address" data-field="address" value="${esc(j.address)}"></div>
     <div class="grid2">
-      <div class="field"><label for="f-source">Lead source</label>${sel("source",[["","Pick one"],...SOURCES],j.source)}</div>
+      <div class="field"><label for="f-source">Lead source</label>${sel("source",[["","Pick one"],...SOURCES,...(j.source&&!SOURCES.includes(j.source)?[j.source]:[])],j.source)}
+        ${j.source==="Other"?`<input class="input" id="f-sourceOther" data-field="sourceOther" placeholder="Type the source" value="${esc(j.sourceOther)}" style="margin-top:6px">`:""}</div>
       <div class="field"><label for="f-partnerId">Lead partner</label>${sel("partnerId",[["","None"],...ps.map(p=>[p.id,p.name])],j.partnerId)}</div>
     </div>
     ${j.trade==="roofing"?`<div class="grid2">
@@ -817,19 +884,21 @@ function quickAdd(){
       <div class="field"><label for="qa-phone">Phone</label><input class="input" id="qa-phone" type="tel" inputmode="tel"></div>
       <div class="field"><label for="qa-address">Address</label><input class="input" id="qa-address"></div>
       <div class="grid2">
-        <div class="field"><label for="qa-source">Lead source</label><select class="input" id="qa-source"><option value="">Pick one</option>${SOURCES.map(s=>`<option ${S.trade==="granite"&&s==="Sign call"?"selected":""}>${esc(s)}</option>`).join("")}</select></div>
+        <div class="field"><label for="qa-source">Lead source</label><select class="input" id="qa-source"><option value="">Pick one</option>${SOURCES.map(s=>`<option>${esc(s)}</option>`).join("")}</select>
+          <input class="input" id="qa-other" placeholder="Type the source" hidden style="margin-top:6px"></div>
         ${ps.length?`<div class="field"><label for="qa-partner">Lead partner</label><select class="input" id="qa-partner"><option value="">None</option>${ps.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select></div>`:""}
       </div>
       <div class="field"><label for="qa-note">Note (optional)</label><textarea class="input" id="qa-note" style="min-height:60px"></textarea></div>
       <div class="row"><button class="btn primary" type="submit">Add to Lead</button><button class="btn ghost" type="button" data-act="closeModal">Cancel</button></div>
     </form>`, box=>{
+    box.querySelector("#qa-source").addEventListener("change", e=>{ const o=box.querySelector("#qa-other"); o.hidden = e.target.value!=="Other"; if(!o.hidden) o.focus(); });
     box.querySelector("#qa").addEventListener("submit", e=>{
       e.preventDefault();
       const name=box.querySelector("#qa-name").value.trim(); if(!name) return;
       const partnerId = box.querySelector("#qa-partner")?.value || "";
       const now=Date.now(), note=box.querySelector("#qa-note").value.trim();
       const j={id:rid(), trade:S.trade, stage:"Lead", name, phone:box.querySelector("#qa-phone").value.trim(), email:"",
-        address:box.querySelector("#qa-address").value.trim(), source: partnerId?"Partner":box.querySelector("#qa-source").value,
+        address:box.querySelector("#qa-address").value.trim(), source: box.querySelector("#qa-source").value, sourceOther: box.querySelector("#qa-source").value==="Other" ? box.querySelector("#qa-other").value.trim() : "",
         partnerId, splitPct:null, splitBasis:"", contract:null, carrier:"", claimNo:"", lost:false, lostReason:"", lostAt:null,
         createdAt:now, updatedAt:now, lastContact:null, closedAt:null, driveFolderId:null,
         notes: note?[{id:rid(), t:now, kind:"note", text:note}]:[], expenses:[], payments:[], docs:[]};
@@ -1141,6 +1210,8 @@ document.addEventListener("click", e=>{
 document.addEventListener("change", e=>{
   const el=e.target;
   if(el.id==="docInput"){ uploadDoc(el); return; }
+  if(el.id==="srcYear"){ S.srcYear=Number(el.value); render(); return; }
+  if(el.id==="srcFilter"){ S.srcFilter=el.value; render(); return; }
   const f=el.dataset.field; if(!f || !S.openJob) return;
   let v=el.value;
   if(f==="contract") v = v==="" ? null : n(v);
@@ -1148,7 +1219,6 @@ document.addEventListener("change", e=>{
   const id=S.openJob;
   mutateJob(id, x=>{
     x[f]=v;
-    if(f==="partnerId" && v) x.source="Partner";
     if(f==="trade"){ if(!STAGES[v].includes(x.stage)) x.stage="Lead"; x.closedAt = x.stage===CLOSED[v] ? (x.closedAt||Date.now()) : null; }
   });
   if(f==="trade"){ S.trade=v; toast("Moved to the "+tradeName(v)+" board"); }
