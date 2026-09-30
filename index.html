@@ -292,6 +292,7 @@ const DEFAULT_SETTINGS = {partners:[], receiptNo:0};
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
+const APP_VERSION = "Sep 29 · in-app camera 2";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -402,7 +403,7 @@ function openCamera(){
   return new Promise(async resolve=>{
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ resolve(undefined); return; }
     let stream;
-    try{ stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1440}}, audio:false}); }
+    try{ stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}, width:{ideal:1600}, height:{ideal:1200}}, audio:false}); }
     catch(e){ resolve(e && e.name==="NotAllowedError" ? "denied" : undefined); return; }
     const el=document.createElement("div"); el.className="cam";
     el.innerHTML=`<video playsinline autoplay muted></video><div class="camctl"><button type="button" class="btn" data-c="x">Cancel</button><button type="button" class="shutter" data-c="snap" aria-label="Take photo"></button><span style="width:84px"></span></div>`;
@@ -413,8 +414,9 @@ function openCamera(){
       const c=e.target.closest("[data-c]"); if(!c) return;
       if(c.dataset.c==="x") return done(null);
       if(!v.videoWidth) return;
-      const cv=document.createElement("canvas"); cv.width=v.videoWidth; cv.height=v.videoHeight;
-      cv.getContext("2d").drawImage(v,0,0); cv.toBlob(b=>done(b),"image/jpeg",0.9);
+      const sc=Math.min(1,1600/Math.max(v.videoWidth,v.videoHeight)), cv=document.createElement("canvas");
+      cv.width=Math.round(v.videoWidth*sc); cv.height=Math.round(v.videoHeight*sc);
+      cv.getContext("2d").drawImage(v,0,0,cv.width,cv.height); cv.toBlob(b=>done(b),"image/jpeg",0.85);
     });
   });
 }
@@ -423,7 +425,6 @@ function photoPickerHTML(pfx, what){
       <button type="button" class="btn block" id="${pfx}-cam">📷 Take photo</button>
       <span class="btn block filebtn">🖼 Upload from gallery<input id="${pfx}-lib" type="file" accept="image/*" aria-label="Upload ${what} from gallery"></span>
     </div>
-    <input id="${pfx}-camfile" class="vh" type="file" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">
     <img id="${pfx}-prev" alt="${what} preview" hidden style="max-height:180px;border-radius:8px;object-fit:contain;background:var(--sunk)">
     <p class="small muted" style="margin:0" id="${pfx}-msg"></p>`;
 }
@@ -439,13 +440,12 @@ function wirePhotoPicker(box, pfx, onPhoto){
   };
   const onFile = e=>{ const f=e.target.files[0]; e.target.value=""; use(f); };
   box.querySelector(`#${pfx}-lib`).addEventListener("change", onFile);
-  box.querySelector(`#${pfx}-camfile`).addEventListener("change", onFile);
   box.querySelector(`#${pfx}-cam`).addEventListener("click", async ()=>{
     const r = await openCamera();
     if(r instanceof Blob) return use(r);
     if(r===null) return;
-    if(r==="denied"){ msg.textContent="Camera is blocked for this app. Allow camera in Chrome's site settings, or use Upload from gallery."; return; }
-    box.querySelector(`#${pfx}-camfile`).click();
+    if(r==="denied"){ msg.textContent="Camera is blocked. In Chrome tap ⋮ → Settings → Site settings → Camera and allow this site, or use Upload from gallery."; return; }
+    msg.textContent="The camera couldn't start. Close other apps and try again, or use Upload from gallery.";
   });
 }
 const ASSET_TYPES = ["image/png","image/jpeg","image/gif","image/webp","application/pdf"];
@@ -752,9 +752,10 @@ function settingsView(){
       ${ps.length?`<div class="list">${ps.map(p=>`<div class="li"><div class="grow"><div class="t">${esc(p.name)}</div><div class="s">${n(p.pct)}% of ${p.basis==="contract"?"contract price":"profit"}</div></div><button class="btn small" data-act="editPartner" data-id="${esc(p.id)}">Edit</button></div>`).join("")}</div>`:""}
       <button class="btn" data-act="editPartner">+ Add partner</button>
     </div>
+    <p class="small muted" style="margin:0">App version ${APP_VERSION}</p>
     <div class="panel stack"><h3 class="sec">Account</h3>
       <p class="small muted" style="margin:0">Signed in as ${esc(session?.user?.email||"")}. Photos, receipts and documents are stored privately in your Red Hammer database.</p>
-      <button class="btn" data-act="signOut">Sign out</button>
+      <div class="row"><button class="btn" data-act="signOut">Sign out</button><button class="btn" data-act="forceUpdate">Get latest version</button></div>
     </div>
     <div class="panel stack"><h3 class="sec">Coming next</h3>
       <div class="list small">
@@ -1261,6 +1262,7 @@ const ACT = {
   },
   editPartner:b=>editPartner(b.dataset.id),
   signOut:async()=>{ await sb.auth.signOut(); },
+  forceUpdate:()=>location.replace(location.pathname+"?v="+Date.now()),
 };
 document.addEventListener("click", e=>{
   const a=e.target.closest("[data-act]"); if(!a) return;
@@ -1355,7 +1357,21 @@ sb.auth.onAuthStateChange((ev, sess)=>{
 });
 window.addEventListener("online", ()=>{ if(session){ S.dbOk=true; loadAll(); } });
 window.addEventListener("offline", ()=>{ S.dbOk=false; renderSoon(); });
-document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible" && session) loadAll(); });
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible"){ if(session) loadAll(); checkUpdate(); } });
+/* tell the user when a newer version of the app is online */
+async function checkUpdate(){
+  try{
+    const t = await (await fetch("./index.html?check="+Date.now(), {cache:"no-store"})).text();
+    const m = t.match(/const APP_VERSION = "([^"]+)"/);
+    if(m && m[1]!==APP_VERSION && !$("#updbar")){
+      const bar=document.createElement("div"); bar.id="updbar"; bar.className="toast"; bar.style.bottom="calc(80px + env(safe-area-inset-bottom,0px))";
+      bar.innerHTML=`A new version is ready. <button class="btn small" style="margin-left:8px">Update now</button>`;
+      bar.querySelector("button").onclick=()=>location.replace(location.pathname+"?v="+Date.now());
+      document.body.appendChild(bar);
+    }
+  }catch(e){}
+}
+setTimeout(checkUpdate, 3000); setInterval(checkUpdate, 10*60e3);
 render();
 })();
 </script>
