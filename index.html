@@ -293,7 +293,7 @@ const DEFAULT_SETTINGS = {partners:[], receiptNo:0};
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Sep 29 · sharper camera";
+const APP_VERSION = "Sep 29 · sharper camera 2";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -383,6 +383,24 @@ function writeErr(e){
 /* Drive filing is paused in the standalone app; files live in the app's own storage. */
 async function fileToDrive(){}
 /* ---------- images / files ---------- */
+/* paperwork cleanup: stretch contrast (lifts haze, darkens ink) and sharpen text edges */
+function enhancePaper(g, w, h){
+  const img=g.getImageData(0,0,w,h), d=img.data, n=w*h;
+  const hist=new Uint32Array(256);
+  for(let i=0;i<d.length;i+=4) hist[(d[i]*77+d[i+1]*150+d[i+2]*29)>>8]++;
+  let lo=0, hi=255, acc=0;
+  for(let v=0;v<256;v++){ acc+=hist[v]; if(acc>n*0.01){ lo=v; break; } }
+  acc=0; for(let v=255;v>=0;v--){ acc+=hist[v]; if(acc>n*0.02){ hi=v; break; } }
+  if(hi-lo<40){ lo=0; hi=255; }
+  const lut=new Uint8ClampedArray(256), span=hi-lo;
+  for(let v=0;v<256;v++) lut[v]=Math.round(Math.pow(Math.min(1,Math.max(0,(v-lo)/span)),1.15)*255);
+  for(let i=0;i<d.length;i+=4){ d[i]=lut[d[i]]; d[i+1]=lut[d[i+1]]; d[i+2]=lut[d[i+2]]; }
+  /* light unsharp mask (3x3), 60% strength */
+  const src=new Uint8ClampedArray(d), row=w*4, k=0.6;
+  for(let y=1;y<h-1;y++){ for(let x=1;x<w-1;x++){ const p=y*row+x*4;
+    for(let c=0;c<3;c++){ const o=p+c, lap=4*src[o]-src[o-4]-src[o+4]-src[o-row]-src[o+row]; d[o]=src[o]+k*lap; } } }
+  g.putImageData(img,0,0);
+}
 /* shrink photos: 1600px long edge, JPEG, stepping quality down until under ~350 KB (receipts stay sharp) */
 async function compressImage(file){
   if(!file || !String(file.type||"image/jpeg").startsWith("image/") || file.type==="image/gif") return file;
@@ -391,6 +409,7 @@ async function compressImage(file){
     const max = 1600, sc = Math.min(1, max/Math.max(bmp.width,bmp.height));
     const c = document.createElement("canvas"); c.width=Math.round(bmp.width*sc); c.height=Math.round(bmp.height*sc);
     const g = c.getContext("2d"); g.imageSmoothingEnabled=true; g.imageSmoothingQuality="high"; g.fillStyle="#fff"; g.fillRect(0,0,c.width,c.height); g.drawImage(bmp,0,0,c.width,c.height);
+    try{ enhancePaper(g, c.width, c.height); }catch(e){}
     let out=null;
     g.imageSmoothingQuality="high";
     for(const q of [0.8,0.72,0.64,0.55]){
