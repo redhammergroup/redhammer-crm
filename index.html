@@ -133,6 +133,7 @@ main{padding:14px 16px calc(90px + env(safe-area-inset-bottom,0px))}
 .bar:focus{outline:none}.bar:focus .fill,.bar:hover .fill{background:var(--red-deep)}
 .cam{position:fixed;inset:0;z-index:90;background:#000;display:flex;flex-direction:column}
 .cam video{flex:1;min-height:0;width:100%;object-fit:contain;background:#000}
+.camhint{position:absolute;top:calc(14px + env(safe-area-inset-top,0px));left:0;right:0;text-align:center;color:#fff;font-size:14px;text-shadow:0 1px 3px #000;pointer-events:none}
 .camctl{display:flex;align-items:center;justify-content:space-between;padding:16px 20px calc(20px + env(safe-area-inset-bottom,0px));background:#000}
 .camctl .btn{background:#222;color:#fff;border-color:#444;width:84px;justify-content:center}
 .shutter{width:72px;height:72px;border-radius:50%;border:4px solid #fff;background:var(--red);box-shadow:0 0 0 3px #000 inset}
@@ -292,7 +293,7 @@ const DEFAULT_SETTINGS = {partners:[], receiptNo:0};
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Sep 29 · in-app camera 3";
+const APP_VERSION = "Sep 29 · sharper camera";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -382,41 +383,90 @@ function writeErr(e){
 /* Drive filing is paused in the standalone app; files live in the app's own storage. */
 async function fileToDrive(){}
 /* ---------- images / files ---------- */
-/* shrink photos: 1280px long edge, JPEG, stepping quality down until under ~180 KB */
+/* shrink photos: 1600px long edge, JPEG, stepping quality down until under ~350 KB (receipts stay sharp) */
 async function compressImage(file){
   if(!file || !String(file.type||"image/jpeg").startsWith("image/") || file.type==="image/gif") return file;
   try{
     const bmp = await createImageBitmap(file);
-    const max = 1280, sc = Math.min(1, max/Math.max(bmp.width,bmp.height));
+    const max = 1600, sc = Math.min(1, max/Math.max(bmp.width,bmp.height));
     const c = document.createElement("canvas"); c.width=Math.round(bmp.width*sc); c.height=Math.round(bmp.height*sc);
-    const g = c.getContext("2d"); g.fillStyle="#fff"; g.fillRect(0,0,c.width,c.height); g.drawImage(bmp,0,0,c.width,c.height);
+    const g = c.getContext("2d"); g.imageSmoothingEnabled=true; g.imageSmoothingQuality="high"; g.fillStyle="#fff"; g.fillRect(0,0,c.width,c.height); g.drawImage(bmp,0,0,c.width,c.height);
     let out=null;
-    for(const q of [0.62,0.52,0.42,0.34]){
+    g.imageSmoothingQuality="high";
+    for(const q of [0.8,0.72,0.64,0.55]){
       out = await new Promise(r=>c.toBlob(r,"image/jpeg",q));
-      if(out && out.size <= 180000) break;
+      if(out && out.size <= 350000) break;
     }
     return (out && out.size < file.size) ? out : (out || file);
   }catch(e){ return file; }
 }
-/* camera inside the app, so Android never has to leave the CRM */
+/* camera inside the app, so Android never has to leave the CRM.
+   Picks the main rear lens (not the ultra-wide, which can't focus close), asks for continuous focus,
+   and takes a real still photo when the phone supports it. */
+async function camStream(deviceId){
+  const v = deviceId ? {deviceId:{exact:deviceId}, width:{ideal:3840}, height:{ideal:2160}}
+                     : {facingMode:{ideal:"environment"}, width:{ideal:3840}, height:{ideal:2160}};
+  return navigator.mediaDevices.getUserMedia({video:v, audio:false});
+}
+async function backCameras(){
+  try{
+    const ds=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==="videoinput");
+    const back=ds.filter(d=>/back|rear|environment/i.test(d.label));
+    const list=(back.length?back:ds);
+    /* main lens first: Android usually labels it "camera2 0"; push wide/tele/macro to the end */
+    const score=d=>(/camera2 0\b/.test(d.label)?0:10)+(/ultra|wide|tele|macro|depth/i.test(d.label)?5:0);
+    return list.slice().sort((a,b)=>score(a)-score(b));
+  }catch(e){ return []; }
+}
+async function tuneTrack(track){
+  try{
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    const adv=[];
+    if(caps.focusMode && caps.focusMode.includes("continuous")) adv.push({focusMode:"continuous"});
+    if(caps.exposureMode && caps.exposureMode.includes("continuous")) adv.push({exposureMode:"continuous"});
+    if(adv.length) await track.applyConstraints({advanced:adv});
+  }catch(e){}
+}
 function openCamera(){
   return new Promise(async resolve=>{
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ resolve(undefined); return; }
-    let stream;
-    try{ stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}, width:{ideal:1600}, height:{ideal:1200}}, audio:false}); }
-    catch(e){ window.__camErr = (e && (e.name+": "+e.message)) || "unknown"; resolve(e && e.name==="NotAllowedError" ? "denied" : undefined); return; }
+    let stream, cams=[], camIdx=0;
+    try{
+      stream = await camStream();
+      cams = await backCameras();
+      const cur = stream.getVideoTracks()[0].getSettings().deviceId;
+      if(cams.length && cams[0].deviceId && cams[0].deviceId!==cur){
+        try{ const s2=await camStream(cams[0].deviceId); stream.getTracks().forEach(t=>t.stop()); stream=s2; }catch(e){}
+      }
+      camIdx = Math.max(0, cams.findIndex(c=>c.deviceId===stream.getVideoTracks()[0].getSettings().deviceId));
+    }catch(e){ window.__camErr = (e && (e.name+": "+e.message)) || "unknown"; resolve(e && e.name==="NotAllowedError" ? "denied" : undefined); return; }
     const el=document.createElement("div"); el.className="cam";
-    el.innerHTML=`<video playsinline autoplay muted></video><div class="camctl"><button type="button" class="btn" data-c="x">Cancel</button><button type="button" class="shutter" data-c="snap" aria-label="Take photo"></button><span style="width:84px"></span></div>`;
+    el.innerHTML=`<video playsinline autoplay muted></video><div class="camhint">Hold steady, fill the screen with the receipt</div>
+      <div class="camctl"><button type="button" class="btn" data-c="x">Cancel</button><button type="button" class="shutter" data-c="snap" aria-label="Take photo"></button>
+      ${cams.length>1?`<button type="button" class="btn" data-c="lens">Switch lens</button>`:`<span style="width:84px"></span>`}</div>`;
     document.body.appendChild(el);
-    const v=el.querySelector("video"); v.srcObject=stream;
+    const v=el.querySelector("video");
+    const attach=async()=>{ v.srcObject=stream; await tuneTrack(stream.getVideoTracks()[0]); };
+    await attach();
+    let busy=false;
     const done=b=>{ stream.getTracks().forEach(t=>t.stop()); el.remove(); resolve(b); };
-    el.addEventListener("click", e=>{
-      const c=e.target.closest("[data-c]"); if(!c) return;
+    el.addEventListener("click", async e=>{
+      const c=e.target.closest("[data-c]"); if(!c || busy) return;
       if(c.dataset.c==="x") return done(null);
-      if(!v.videoWidth) return;
-      const sc=Math.min(1,1600/Math.max(v.videoWidth,v.videoHeight)), cv=document.createElement("canvas");
-      cv.width=Math.round(v.videoWidth*sc); cv.height=Math.round(v.videoHeight*sc);
-      cv.getContext("2d").drawImage(v,0,0,cv.width,cv.height); cv.toBlob(b=>done(b),"image/jpeg",0.85);
+      if(c.dataset.c==="lens"){
+        busy=true; camIdx=(camIdx+1)%cams.length;
+        try{ const s2=await camStream(cams[camIdx].deviceId); stream.getTracks().forEach(t=>t.stop()); stream=s2; await attach(); }catch(err){}
+        busy=false; return;
+      }
+      busy=true; c.style.opacity=".5";
+      const track=stream.getVideoTracks()[0];
+      /* a real still photo (autofocus + full sensor) where Chrome supports it */
+      if(window.ImageCapture){
+        try{ const b=await new ImageCapture(track).takePhoto(); if(b && b.size) return done(b); }catch(err){}
+      }
+      if(!v.videoWidth){ busy=false; c.style.opacity=""; return; }
+      const cv=document.createElement("canvas"); cv.width=v.videoWidth; cv.height=v.videoHeight;
+      cv.getContext("2d").drawImage(v,0,0); cv.toBlob(b=>done(b),"image/jpeg",0.92);
     });
   });
 }
