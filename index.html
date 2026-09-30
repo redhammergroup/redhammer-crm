@@ -296,7 +296,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Sep 30 · Tony portal 4";
+const APP_VERSION = "Sep 30 · Tony portal 6";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -325,13 +325,13 @@ const digits = p => String(p||"").replace(/[^\d+]/g,"");
 const tradeName = t => (TRADES.find(x=>x[0]===t)||[])[1] || t;
 
 /* a job has a profit split only when its lead source is a partner (e.g. Tony) */
-const ROOF_AGES = ["Under 5 years","5–10 years","10–15 years","15–20 years","20+ years","Not sure"];
 const paidOut = j => (j.partnerPayouts||[]).reduce((a,p)=>a+n(p.amount),0);
 function partnerTotals(jobs){
-  const t={earned:0, paid:0, owed:0, pipeShare:0, pipeRevenue:0, closedRevenue:0, collected:0, closed:0, open:0};
+  const t={earned:0, paid:0, owed:0, pipeShare:0, pipeRevenue:0, closedRevenue:0, collected:0, closed:0, open:0, dead:0};
   jobs.forEach(j=>{ const c=calc(j), po=paidOut(j); t.paid+=po; t.collected+=c.paid;
     if(!j.lost && isClosed(j)){ t.earned+=c.cut; t.closedRevenue+=c.contract; t.closed++; }
-    else if(isOpen(j)){ t.pipeShare+=c.cut; t.pipeRevenue+=c.contract; t.open++; } });
+    else if(isOpen(j)){ t.pipeShare+=c.cut; t.pipeRevenue+=c.contract; t.open++; }
+    if(j.lost) t.dead++; });
   t.owed=Math.max(0, t.earned-t.paid); return t;
 }
 const TONY_DEFAULT = {id:"tony", name:"Tony", pct:15, basis:"profit"};
@@ -661,13 +661,15 @@ function renderPartner(){
     <div class="phero">
       <div><div class="label" style="color:var(--bar-muted)">Paid to ${esc(name)}</div><div class="v num">${money(t.paid)}</div>
       <div class="small" style="color:var(--bar-muted)">Your split: ${n(me.pct)}% of ${basis}</div></div>
-      <div class="kv num"><div><span>Owed to you</span><b>${money(t.owed)}</b></div><div><span>In the pipeline</span><b>${money(t.pipeShare)}</b></div><div><span>Earned total</span><b>${money(t.earned)}</b></div></div>
+      <div class="kv num" style="grid-template-columns:repeat(2,1fr);row-gap:12px">
+        <div><span>Jobs pending</span><b>${t.open}</b></div><div><span>Jobs dead</span><b>${t.dead}</b></div>
+        <div><span>In the pipeline</span><b>${money(t.pipeShare)}</b></div><div><span>Earned total</span><b>${money(t.earned)}</b></div></div>
     </div>
-    <p class="small muted" style="margin:0">Your share is earned when a job is complete. "In the pipeline" is your expected share on open jobs.</p>
-    ${jobs.length?`<div class="panel list">${jobs.map(j=>{ const c=calc(j); return `<div class="li" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer">
+    <p class="small muted" style="margin:0">Pending jobs are the ones Gabriel is working. Dead jobs didn't go anywhere. "In the pipeline" is your expected share on pending jobs; you earn it when a job is complete.</p>
+    ${jobs.length?[["Pending",jobs.filter(isOpen)],["Completed",jobs.filter(j=>!j.lost&&isClosed(j))],["Dead",jobs.filter(j=>j.lost)]].filter(g=>g[1].length).map(([label,list])=>`<div class="panel stack" style="gap:4px"><h3 class="sec">${label} <span class="r small muted" style="font-family:var(--f-body);letter-spacing:0;text-transform:none;font-weight:400">${list.length}</span></h3><div class="list">${list.map(j=>{ const c=calc(j); return `<div class="li" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer">
       <div class="grow"><div class="t">${esc(j.name||"No name")}</div>
-      <div class="s">${j.lost?"Closed out":esc(j.stage)}${j.appointmentAt?" · 📅 "+esc(fdtLong(j.appointmentAt)):""}${j.address?" · "+esc(j.address):""}</div></div>
-      <div style="text-align:right"><b class="num">${c.contract?money(c.cut):"—"}</b><div class="s small muted">${paidOut(j)>=c.cut&&c.cut>0?"paid":paidOut(j)>0?money(paidOut(j))+" paid":"your share"}</div></div></div>`; }).join("")}</div>`
+      <div class="s">${j.lost?"Dead":esc(j.stage)}${j.appointmentAt?" · 📅 "+esc(fdtLong(j.appointmentAt)):""}${j.address?" · "+esc(j.address):""}</div></div>
+      <div style="text-align:right"><b class="num">${j.lost?"—":c.contract?money(c.cut):"—"}</b><div class="s small muted">${j.lost?"":paidOut(j)>=c.cut&&c.cut>0?"paid":paidOut(j)>0?money(paidOut(j))+" paid":"your share"}</div></div></div>`; }).join("")}</div></div>`).join("")
       :`<div class="emptybox"><b>No leads yet</b>Tap <b>Submit a lead</b> to send Gabriel your first one.</div>`}
     <div class="row"><button class="btn" data-act="signOut">Sign out</button></div>
   </div>`;
@@ -682,8 +684,7 @@ function renderPartnerForm(jobs){
       <div class="grid2"><div class="field"><label for="pl-phone">Phone</label><input class="input" id="pl-phone" type="tel" inputmode="tel" required></div>
         <div class="field"><label for="pl-email">Email (optional)</label><input class="input" id="pl-email" type="email"></div></div>
       <div class="field"><label for="pl-address">Property address</label><input class="input" id="pl-address" required></div>
-      <div class="field"><label for="pl-appt">Appointment date & time</label><input class="input" id="pl-appt" type="datetime-local" required></div>
-      <div class="field"><label for="pl-roofage">Age of roof</label><select class="input" id="pl-roofage" required><option value="">Pick one</option>${ROOF_AGES.map(a=>`<option>${esc(a)}</option>`).join("")}</select></div>
+      <div class="field"><label for="pl-appt">Appointment date & time</label><input class="input" id="pl-appt" type="datetime-local" step="900" required value="${(()=>{ const d=new Date(); d.setHours(d.getHours()+1,0,0,0); return toLocalInput(d.getTime()); })()}"></div>
       <div class="grid2"><div class="field"><label for="pl-carrier">Insurance carrier (optional)</label><input class="input" id="pl-carrier"></div>
         <div class="field"><label for="pl-claim">Claim # (optional)</label><input class="input" id="pl-claim"></div></div>
       <div class="field"><label for="pl-notes">Notes for Gabriel</label><textarea class="input" id="pl-notes" placeholder="Damage, gate code, best time to call…"></textarea></div>
@@ -693,6 +694,7 @@ function renderPartnerForm(jobs){
     <div class="panel stack" style="max-width:560px;margin:12px auto 0"><h3 class="sec">Submitted today · ${todays.length}</h3>
       ${todays.length?`<div class="list">${todays.map(j=>`<div class="li"><div class="grow"><div class="t">${esc(j.name)}</div><div class="s">📅 ${j.appointmentAt?esc(fdtLong(j.appointmentAt)):"no time"} · ${esc(j.address||"")}</div></div></div>`).join("")}</div>`:`<p class="small muted" style="margin:0">Nothing yet today.</p>`}
     </div>`;
+  $("#pl-appt").addEventListener("change", e=>{ const v=e.target.value; if(!v) return; const d=new Date(v); const m=Math.round(d.getMinutes()/15)*15; d.setMinutes(m,0,0); e.target.value=toLocalInput(d.getTime()); });
   $("#pl").addEventListener("submit", async e=>{
     e.preventDefault();
     const v=id=>$(id).value.trim(), btn=$("#pl-go"), msg=$("#pl-msg");
@@ -701,7 +703,7 @@ function renderPartnerForm(jobs){
     btn.disabled=true; btn.textContent="Submitting…";
     const now=Date.now(), who=(S.me&&S.me.name)||"Partner";
     const j={id:rid(), trade:"roofing", stage:"Lead", name:v("#pl-name"), phone:v("#pl-phone"), email:v("#pl-email"), address:v("#pl-address"),
-      source:who, sourceOther:"", partnerId:"", splitPct:null, splitBasis:"", contract:null, carrier:v("#pl-carrier"), claimNo:v("#pl-claim"), roofAge:v("#pl-roofage"),
+      source:who, sourceOther:"", partnerId:"", splitPct:null, splitBasis:"", contract:null, carrier:v("#pl-carrier"), claimNo:v("#pl-claim"),
       lost:false, lostReason:"", lostAt:null, createdAt:now, updatedAt:now, lastContact:null, closedAt:null, appointmentAt:appt, submittedBy:who, alarmFor:null,
       notes:[{id:rid(), t:now, kind:"note", text:`Submitted by ${who}`+(v("#pl-notes")?"\n"+v("#pl-notes"):"")}], expenses:[], payments:[], docs:[]};
     const topic=S.me&&S.me.notify_topic;
@@ -719,16 +721,15 @@ function renderPartnerSheet(){
   const ex=[...(j.expenses||[])].sort((a,b)=>(b.date||0)-(a.date||0));
   const notes=[...(j.notes||[])].filter(x=>!(x.kind==="system" && /^Payment /.test(x.text||""))).sort((a,b)=>b.t-a.t);
   el.innerHTML=`<div class="scrim" data-act="close"></div><div class="sheet" role="dialog" aria-label="${esc(j.name)}">
-    <div class="sheethead"><div class="rowtop"><button class="back" data-act="close" aria-label="Back">‹ Back</button><div class="jn">${esc(j.name||"No name")}</div><div class="tr">${j.lost?"Closed out":esc(j.stage)}</div></div>
+    <div class="sheethead"><div class="rowtop"><button class="back" data-act="close" aria-label="Back">‹ Back</button><div class="jn">${esc(j.name||"No name")}</div><div class="tr">${j.lost?"Dead":esc(j.stage)}</div></div>
       <div class="hero"><div class="big"><span class="v num">${money(c.cut)}</span><span class="k">your share · ${n(c.pct)}% of ${c.basis==="contract"?"contract":"profit"}</span></div>
       <div class="kv num"><div><span>Contract</span><b>${money(c.contract)}</b></div><div><span>Expenses</span><b>${money(c.expenses)}</b></div><div><span>Profit</span><b>${money(c.profit)}</b></div></div></div></div>
     <div class="sheetbody">
       <div class="panel stack"><h3 class="sec">Details</h3><div class="list">
-        <div class="li"><div class="grow">Stage</div><b>${j.lost?"Closed out":esc(j.stage)}</b></div>
+        <div class="li"><div class="grow">Stage</div><b>${j.lost?"Dead":esc(j.stage)}</b></div>
         ${j.appointmentAt?`<div class="li"><div class="grow">Appointment</div><b>${esc(fdtLong(j.appointmentAt))}</b></div>`:""}
         ${j.phone?`<div class="li"><div class="grow">Phone</div><b>${esc(j.phone)}</b></div>`:""}
         ${j.address?`<div class="li"><div class="grow">Address</div><b style="text-align:right">${esc(j.address)}</b></div>`:""}
-        ${j.roofAge?`<div class="li"><div class="grow">Age of roof</div><b>${esc(j.roofAge)}</b></div>`:""}
         ${j.carrier?`<div class="li"><div class="grow">Insurance</div><b>${esc(j.carrier)}${j.claimNo?" · "+esc(j.claimNo):""}</b></div>`:""}
         <div class="li"><div class="grow">Sent</div><b>${fdate(j.createdAt)}</b></div>
       </div></div>
@@ -1059,8 +1060,7 @@ function jobInfo(j){
     ${j.trade==="roofing"?`<div class="grid2">
       <div class="field"><label for="f-carrier">Insurance carrier</label><input class="input" id="f-carrier" data-field="carrier" value="${esc(j.carrier)}"></div>
       <div class="field"><label for="f-claimNo">Claim number</label><input class="input" id="f-claimNo" data-field="claimNo" value="${esc(j.claimNo)}"></div>
-    </div>
-    <div class="field"><label for="f-roofAge">Age of roof</label>${sel("roofAge",[["","Pick one"],...ROOF_AGES,...(j.roofAge&&!ROOF_AGES.includes(j.roofAge)?[j.roofAge]:[])],j.roofAge)}</div>`:""}
+    </div>`:""}
     <div class="field"><label for="f-trade">Board</label>${sel("trade",TRADES,j.trade)}</div>
   </div>
   <div class="panel stack"><h3 class="sec">Estimate</h3>
