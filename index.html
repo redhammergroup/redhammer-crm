@@ -138,6 +138,8 @@ main{padding:14px 16px calc(90px + env(safe-area-inset-bottom,0px))}
 .camctl .btn{background:#222;color:#fff;border-color:#444;width:84px;justify-content:center}
 .shutter{width:72px;height:72px;border-radius:50%;border:4px solid #fff;background:var(--red);box-shadow:0 0 0 3px #000 inset}
 .thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.pill.signed{background:var(--good);color:#fff;font-weight:700;letter-spacing:.02em}
+.card.signedc{box-shadow:inset 4px 0 0 var(--good),var(--shadow);border-color:var(--good)}
 .legend{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px}
 .card .amt{margin-left:auto;font-weight:600;font-size:14px}
 .card.stale{box-shadow:inset 3px 0 0 var(--warn),var(--shadow)}
@@ -265,7 +267,7 @@ textarea.input{min-height:80px;resize:vertical}
 "use strict";
 /* ---------- constants ---------- */
 const STAGES = {
-  roofing: ["Lead","Inspected","Claim Filed","Denied","Approved","Built","Supplement","Complete"],
+  roofing: ["Appointment","Lead","Inspected","Claim Filed","Denied","Approved","Built","Supplement","Complete"],
   granite: ["Lead","Hot Lead","Appointment","Estimate Sent","Follow-Up","Won","Installed","Paid"],
   other:   ["Lead","Estimate Sent","Won","Complete","Paid"]
 };
@@ -296,7 +298,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Sep 30 · Tony portal 6";
+const APP_VERSION = "Sep 30 · appointments";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -327,11 +329,12 @@ const tradeName = t => (TRADES.find(x=>x[0]===t)||[])[1] || t;
 /* a job has a profit split only when its lead source is a partner (e.g. Tony) */
 const paidOut = j => (j.partnerPayouts||[]).reduce((a,p)=>a+n(p.amount),0);
 function partnerTotals(jobs){
-  const t={earned:0, paid:0, owed:0, pipeShare:0, pipeRevenue:0, closedRevenue:0, collected:0, closed:0, open:0, dead:0};
+  const t={earned:0, paid:0, owed:0, pipeShare:0, pipeRevenue:0, closedRevenue:0, collected:0, closed:0, open:0, dead:0, appts:0, opened:0, signed:0};
   jobs.forEach(j=>{ const c=calc(j), po=paidOut(j); t.paid+=po; t.collected+=c.paid;
     if(!j.lost && isClosed(j)){ t.earned+=c.cut; t.closedRevenue+=c.contract; t.closed++; }
     else if(isOpen(j)){ t.pipeShare+=c.cut; t.pipeRevenue+=c.contract; t.open++; }
-    if(j.lost) t.dead++; });
+    if(j.lost) t.dead++;
+    else if(isOpen(j)){ if(j.stage==="Appointment") t.appts++; else if(j.signedAt) t.signed++; else t.opened++; } });
   t.owed=Math.max(0, t.earned-t.paid); return t;
 }
 const TONY_DEFAULT = {id:"tony", name:"Tony", pct:15, basis:"profit"};
@@ -644,8 +647,8 @@ function renderMain(){
 function renderPartner(){
   $("#nav").hidden=true; $("#fab").hidden=true;
   const me=S.me, name=(me&&me.name)||"Partner";
-  $("#top").innerHTML = `<div class="brand"><div class="mark" aria-hidden="true"></div><h1>Red Hammer <span>Leads</span></h1><div class="sync">${syncBadge()}</div></div>
-    ${S.mode==="partner"?`<div class="trades" role="group" aria-label="Sections"><button data-act="ptab" data-v="new" aria-pressed="${S.ptab==="new"}">Submit a lead</button><button data-act="ptab" data-v="leads" aria-pressed="${S.ptab==="leads"}">My leads</button></div>`:`<div style="height:12px"></div>`}`;
+  $("#top").innerHTML = `<div class="brand"><div class="mark" aria-hidden="true"></div><h1>Red Hammer</h1><div class="sync">${syncBadge()}</div></div>
+    ${S.mode==="partner"?`<div class="trades" role="group" aria-label="Sections"><button data-act="ptab" data-v="new" aria-pressed="${S.ptab==="new"}">Set appointment</button><button data-act="ptab" data-v="leads" aria-pressed="${S.ptab==="leads"}">My jobs</button></div>`:`<div style="height:12px"></div>`}`;
   if(S.mode==="none"){
     $("#main").innerHTML=`<div class="panel stack" style="max-width:460px;margin:24px auto"><h3 class="sec">Account not set up yet</h3>
       <p style="margin:0">You're signed in as ${esc(session?.user?.email||"")}, but this login isn't linked to Red Hammer yet. Ask Gabriel to add your email in the CRM.</p>
@@ -661,16 +664,16 @@ function renderPartner(){
     <div class="phero">
       <div><div class="label" style="color:var(--bar-muted)">Paid to ${esc(name)}</div><div class="v num">${money(t.paid)}</div>
       <div class="small" style="color:var(--bar-muted)">Your split: ${n(me.pct)}% of ${basis}</div></div>
-      <div class="kv num" style="grid-template-columns:repeat(2,1fr);row-gap:12px">
-        <div><span>Jobs pending</span><b>${t.open}</b></div><div><span>Jobs dead</span><b>${t.dead}</b></div>
-        <div><span>In the pipeline</span><b>${money(t.pipeShare)}</b></div><div><span>Earned total</span><b>${money(t.earned)}</b></div></div>
+      <div class="kv num" style="grid-template-columns:repeat(3,1fr);row-gap:12px">
+        <div><span>Jobs opened</span><b>${t.opened}</b></div><div><span>Jobs signed</span><b>${t.signed}</b></div><div><span>Jobs dead</span><b>${t.dead}</b></div>
+        <div><span>Appointments</span><b>${t.appts}</b></div><div><span>In the pipeline</span><b>${money(t.pipeShare)}</b></div><div><span>Earned total</span><b>${money(t.earned)}</b></div></div>
     </div>
-    <p class="small muted" style="margin:0">Pending jobs are the ones Gabriel is working. Dead jobs didn't go anywhere. "In the pipeline" is your expected share on pending jobs; you earn it when a job is complete.</p>
-    ${jobs.length?[["Pending",jobs.filter(isOpen)],["Completed",jobs.filter(j=>!j.lost&&isClosed(j))],["Dead",jobs.filter(j=>j.lost)]].filter(g=>g[1].length).map(([label,list])=>`<div class="panel stack" style="gap:4px"><h3 class="sec">${label} <span class="r small muted" style="font-family:var(--f-body);letter-spacing:0;text-transform:none;font-weight:400">${list.length}</span></h3><div class="list">${list.map(j=>{ const c=calc(j); return `<div class="li" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer">
+    <p class="small muted" style="margin:0"><b>Opened</b>: Gabriel is working it. <b>Signed</b>: the homeowner signed the contingency. <b>Dead</b>: it didn't go anywhere. "In the pipeline" is your expected share on open jobs; you earn it when a job is complete.</p>
+    ${jobs.length?[["Upcoming appointments",jobs.filter(j=>isOpen(j)&&j.stage==="Appointment").sort((a,b)=>(a.appointmentAt||0)-(b.appointmentAt||0))],["Signed",jobs.filter(j=>isOpen(j)&&j.stage!=="Appointment"&&j.signedAt)],["Opened",jobs.filter(j=>isOpen(j)&&j.stage!=="Appointment"&&!j.signedAt)],["Completed",jobs.filter(j=>!j.lost&&isClosed(j))],["Dead",jobs.filter(j=>j.lost)]].filter(g=>g[1].length).map(([label,list])=>`<div class="panel stack" style="gap:4px"><h3 class="sec">${label} <span class="r small muted" style="font-family:var(--f-body);letter-spacing:0;text-transform:none;font-weight:400">${list.length}</span></h3><div class="list">${list.map(j=>{ const c=calc(j); return `<div class="li" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer">
       <div class="grow"><div class="t">${esc(j.name||"No name")}</div>
-      <div class="s">${j.lost?"Dead":esc(j.stage)}${j.appointmentAt?" · 📅 "+esc(fdtLong(j.appointmentAt)):""}${j.address?" · "+esc(j.address):""}</div></div>
+      <div class="s">${j.signedAt&&!j.lost?`<span class="pill signed" style="font-size:11px;padding:2px 6px">✓ Signed</span> `:""}${j.lost?"Dead":esc(j.stage)}${j.appointmentAt?" · 📅 "+esc(fdtLong(j.appointmentAt)):""}${j.address?" · "+esc(j.address):""}</div></div>
       <div style="text-align:right"><b class="num">${j.lost?"—":c.contract?money(c.cut):"—"}</b><div class="s small muted">${j.lost?"":paidOut(j)>=c.cut&&c.cut>0?"paid":paidOut(j)>0?money(paidOut(j))+" paid":"your share"}</div></div></div>`; }).join("")}</div></div>`).join("")
-      :`<div class="emptybox"><b>No leads yet</b>Tap <b>Submit a lead</b> to send Gabriel your first one.</div>`}
+      :`<div class="emptybox"><b>No appointments yet</b>Tap <b>Set appointment</b> to book Gabriel your first one.</div>`}
     <div class="row"><button class="btn" data-act="signOut">Sign out</button></div>
   </div>`;
   renderPartnerSheet();
@@ -679,7 +682,7 @@ function renderPartnerForm(jobs){
   const start=new Date(); start.setHours(0,0,0,0);
   const todays=jobs.filter(j=>(j.createdAt||0)>=start.getTime());
   $("#main").innerHTML = `<form id="pl" class="panel stack" style="max-width:560px;margin:0 auto">
-      <h3 class="sec">Submit a lead</h3>
+      <h3 class="sec">Set an appointment</h3>
       <div class="field"><label for="pl-name">Homeowner name</label><input class="input" id="pl-name" required autocomplete="off"></div>
       <div class="grid2"><div class="field"><label for="pl-phone">Phone</label><input class="input" id="pl-phone" type="tel" inputmode="tel" required></div>
         <div class="field"><label for="pl-email">Email (optional)</label><input class="input" id="pl-email" type="email"></div></div>
@@ -688,10 +691,10 @@ function renderPartnerForm(jobs){
       <div class="grid2"><div class="field"><label for="pl-carrier">Insurance carrier (optional)</label><input class="input" id="pl-carrier"></div>
         <div class="field"><label for="pl-claim">Claim # (optional)</label><input class="input" id="pl-claim"></div></div>
       <div class="field"><label for="pl-notes">Notes for Gabriel</label><textarea class="input" id="pl-notes" placeholder="Damage, gate code, best time to call…"></textarea></div>
-      <button class="btn primary block" type="submit" id="pl-go">Submit lead</button>
+      <button class="btn primary block" type="submit" id="pl-go">Book appointment</button>
       <p class="small muted" style="margin:0" id="pl-msg">Gabriel gets an alert right away and an alarm 1 hour before the appointment.</p>
     </form>
-    <div class="panel stack" style="max-width:560px;margin:12px auto 0"><h3 class="sec">Submitted today · ${todays.length}</h3>
+    <div class="panel stack" style="max-width:560px;margin:12px auto 0"><h3 class="sec">Booked today · ${todays.length}</h3>
       ${todays.length?`<div class="list">${todays.map(j=>`<div class="li"><div class="grow"><div class="t">${esc(j.name)}</div><div class="s">📅 ${j.appointmentAt?esc(fdtLong(j.appointmentAt)):"no time"} · ${esc(j.address||"")}</div></div></div>`).join("")}</div>`:`<p class="small muted" style="margin:0">Nothing yet today.</p>`}
     </div>`;
   $("#pl-appt").addEventListener("change", e=>{ const v=e.target.value; if(!v) return; const d=new Date(v); const m=Math.round(d.getMinutes()/15)*15; d.setMinutes(m,0,0); e.target.value=toLocalInput(d.getTime()); });
@@ -700,18 +703,18 @@ function renderPartnerForm(jobs){
     const v=id=>$(id).value.trim(), btn=$("#pl-go"), msg=$("#pl-msg");
     const appt=v("#pl-appt") ? new Date(v("#pl-appt")).getTime() : null;
     if(appt && appt < Date.now()-3600e3){ msg.style.color="var(--red)"; msg.textContent="That appointment time is in the past. Check the date."; return; }
-    btn.disabled=true; btn.textContent="Submitting…";
+    btn.disabled=true; btn.textContent="Booking…";
     const now=Date.now(), who=(S.me&&S.me.name)||"Partner";
-    const j={id:rid(), trade:"roofing", stage:"Lead", name:v("#pl-name"), phone:v("#pl-phone"), email:v("#pl-email"), address:v("#pl-address"),
+    const j={id:rid(), trade:"roofing", stage:"Appointment", name:v("#pl-name"), phone:v("#pl-phone"), email:v("#pl-email"), address:v("#pl-address"),
       source:who, sourceOther:"", partnerId:"", splitPct:null, splitBasis:"", contract:null, carrier:v("#pl-carrier"), claimNo:v("#pl-claim"),
       lost:false, lostReason:"", lostAt:null, createdAt:now, updatedAt:now, lastContact:null, closedAt:null, appointmentAt:appt, submittedBy:who, alarmFor:null,
-      notes:[{id:rid(), t:now, kind:"note", text:`Submitted by ${who}`+(v("#pl-notes")?"\n"+v("#pl-notes"):"")}], expenses:[], payments:[], docs:[]};
+      notes:[{id:rid(), t:now, kind:"note", text:`Appointment booked by ${who}`+(v("#pl-notes")?"\n"+v("#pl-notes"):"")}], expenses:[], payments:[], docs:[]};
     const topic=S.me&&S.me.notify_topic;
     if(topic && appt && await scheduleAlarm(topic, j)) j.alarmFor=appt;
     const {error}=await sb.from("jobs").insert(row(j));
-    if(error){ btn.disabled=false; btn.textContent="Submit lead"; msg.style.color="var(--red)"; msg.textContent="Didn't submit: "+error.message; return; }
-    if(topic) pushAlert(topic,{title:`New lead from ${who}: ${j.name}`, message:`${j.address}\n${j.phone}${appt?"\nAppointment "+fdtLong(appt):""}`, priority:4, tags:"house"});
-    S.jobs[j.id]=j; toast("Lead submitted"); render();
+    if(error){ btn.disabled=false; btn.textContent="Book appointment"; msg.style.color="var(--red)"; msg.textContent="Didn't go through: "+error.message; return; }
+    if(topic) pushAlert(topic,{title:`New appointment from ${who}: ${j.name}`, message:`${j.address}\n${j.phone}${appt?"\nAppointment "+fdtLong(appt):""}`, priority:4, tags:"house"});
+    S.jobs[j.id]=j; toast("Appointment booked"); render();
   });
 }
 function renderPartnerSheet(){
@@ -727,6 +730,7 @@ function renderPartnerSheet(){
     <div class="sheetbody">
       <div class="panel stack"><h3 class="sec">Details</h3><div class="list">
         <div class="li"><div class="grow">Stage</div><b>${j.lost?"Dead":esc(j.stage)}</b></div>
+        ${j.signedAt&&!j.lost?`<div class="li"><div class="grow">Contingency</div><span class="pill signed">✓ Signed ${fdate(j.signedAt)}</span></div>`:""}
         ${j.appointmentAt?`<div class="li"><div class="grow">Appointment</div><b>${esc(fdtLong(j.appointmentAt))}</b></div>`:""}
         ${j.phone?`<div class="li"><div class="grow">Phone</div><b>${esc(j.phone)}</b></div>`:""}
         ${j.address?`<div class="li"><div class="grow">Address</div><b style="text-align:right">${esc(j.address)}</b></div>`:""}
@@ -780,8 +784,8 @@ function renderLogin(){
 function cardHTML(j){
   const c = calc(j), lvl = ageLevel(j), attn = needsAttn(j);
   const partner = partnerFor(j);
-  return `<button class="card ${lvl?"attn"+lvl:""}" draggable="true" data-act="open" data-id="${esc(j.id)}">
-    ${attn?`<span class="meta"><span class="pill attn">Needs attention</span></span>`:""}
+  return `<button class="card ${j.signedAt&&!j.lost?"signedc":lvl?"attn"+lvl:""}" draggable="true" data-act="open" data-id="${esc(j.id)}">
+    ${(j.signedAt&&!j.lost)||attn?`<span class="meta">${j.signedAt&&!j.lost?`<span class="pill signed">✓ Signed contingency</span>`:""}${attn?`<span class="pill attn">Needs attention</span>`:""}</span>`:""}
     <span class="nm">${esc(j.name||"No name")}</span>
     ${j.address?`<span class="ad">${esc(j.address)}</span>`:""}
     <span class="meta">
@@ -822,7 +826,7 @@ function attentionBox(){
 function boardCols(){
   const jobs = Object.values(S.jobs).filter(j=>j.trade===S.trade && !j.lost);
   const cols = STAGES[S.trade].map(st=>{
-    const list = jobs.filter(j=>j.stage===st).sort((a,b)=>attnSort(a,b) || ((b.lastContact||b.createdAt)-(a.lastContact||a.createdAt)));
+    const list = jobs.filter(j=>j.stage===st).sort(st==="Appointment" ? (a,b)=>(a.appointmentAt||9e15)-(b.appointmentAt||9e15) : (a,b)=>attnSort(a,b) || ((b.lastContact||b.createdAt)-(a.lastContact||a.createdAt)));
     const sum = list.reduce((a,j)=>a+n(j.contract),0);
     return `<section class="col" data-stage="${esc(st)}" aria-label="${esc(st)}">
       <div class="colhead"><h2>${esc(st)}</h2><span class="ct">${list.length}</span>${sum?`<span class="sum num">${money(sum)}</span>`:""}</div>
@@ -830,7 +834,7 @@ function boardCols(){
     </section>`;
   }).join("");
   return `<div class="board" id="board">${cols}</div>
-    <div class="legend small muted">Lead age: <span class="pill age15">15+ days</span><span class="pill age30">30+ days</span><span class="pill age60">60+ days</span></div>
+    <div class="legend small muted"><span class="pill signed">✓ Signed contingency</span> Lead age: <span class="pill age15">15+ days</span><span class="pill age30">30+ days</span><span class="pill age60">60+ days</span></div>
     ${S.trade==="roofing"?`<div class="legend small muted">Denied claims: ${PATHS.map(p=>pathPill(p[0])).join("")}</div>`:""}
     <p class="small muted" style="margin:10px 0 0">Swipe for more stages. Drag cards between columns on a computer, or open a job to move it.</p>`;
 }
@@ -1027,6 +1031,9 @@ function jobInfo(j){
     ${j.trade==="roofing" && (j.stage==="Denied" || j.claimPath) ? `<div class="field"><span class="label" style="font-size:12px">Fighting the denial with</span>
       <div class="chips" role="group" aria-label="Denial path">${PATHS.map(([v,l,c])=>`<button class="chip pathchip path-${c}" data-act="setPath" data-v="${esc(v)}" aria-pressed="${j.claimPath===v}">${esc(l)}</button>`).join("")}
       ${j.claimPath?`<button class="chip" data-act="setPath" data-v="">Clear</button>`:""}</div></div>` : ""}
+    ${j.trade==="roofing" ? (j.signedAt
+      ? `<div class="row"><span class="pill signed">✓ Signed contingency · ${fdate(j.signedAt)}</span><button class="btn small ghost" data-act="toggleSigned">Undo</button></div>`
+      : `<button class="btn" data-act="toggleSigned" style="border-color:var(--good);color:var(--good)">✓ Mark contingency signed</button>`) : ""}
   </div>
   <div class="panel stack"><h3 class="sec"><label for="f-appointmentAt">Appointment</label>${j.submittedBy?`<span class="r pill partner" style="font-family:var(--f-body);letter-spacing:0;text-transform:none">From ${esc(j.submittedBy)}</span>`:""}</h3>
     <input class="input" id="f-appointmentAt" data-field="appointmentAt" type="datetime-local" value="${j.appointmentAt?toLocalInput(j.appointmentAt):""}">
@@ -1459,6 +1466,9 @@ const ACT = {
     mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
   },
   setPath:b=>setPath(S.openJob, b.dataset.v),
+  toggleSigned:()=>{ const id=S.openJob, j=S.jobs[id]; if(!j) return; const on=!j.signedAt;
+    mutateJob(id, x=>{ x.signedAt = on ? Date.now() : null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:on?"Contingency signed":"Contingency signed mark removed"}); if(on){ x.lastContact=Date.now(); x.attnAck=Math.max(x.attnAck||0, ageLevel(x)); } });
+    toast(on?"Marked signed":"Signed mark removed"); },
   addPayout:()=>{
     const id=S.openJob, j=S.jobs[id]; if(!j) return; const c=calc(j), who=(c.partner||{}).name||"partner";
     openModal(`<h2>Record payout to ${esc(who)}</h2>
@@ -1664,7 +1674,7 @@ function subscribe(){
     .on("postgres_changes", {event:"*", schema:"public", table:"jobs"}, p=>{
       if(p.eventType==="DELETE"){ delete S.jobs[p.old.id]; }
       else if(p.new && p.new.data){ S.jobs[p.new.id]={...p.new.data, id:p.new.id};
-        if(S.mode==="owner" && p.eventType==="INSERT" && p.new.data.submittedBy){ toast(`New lead from ${p.new.data.submittedBy}: ${p.new.data.name||""}`); sweepAlarms(); } }
+        if(S.mode==="owner" && p.eventType==="INSERT" && p.new.data.submittedBy){ toast(`New appointment from ${p.new.data.submittedBy}: ${p.new.data.name||""}`); sweepAlarms(); } }
       renderSoon();
     })
     .on("postgres_changes", {event:"*", schema:"public", table:"settings"}, p=>{ if(p.new && p.new.data){ S.settings={...DEFAULT_SETTINGS, ...p.new.data}; renderSoon(); } })

@@ -46,7 +46,7 @@ create policy "partner reads own leads" on public.jobs
 drop policy if exists "partner submits leads" on public.jobs;
 create policy "partner submits leads" on public.jobs
   for insert to authenticated
-  with check (partner_id is not null and partner_id = public.my_partner_id() and trade = 'roofing' and stage = 'Lead');
+  with check (partner_id is not null and partner_id = public.my_partner_id() and trade = 'roofing' and stage in ('Appointment','Lead'));
 
 -- A partner can view receipt photos on their own jobs only.
 drop policy if exists "partner reads own job files" on storage.objects;
