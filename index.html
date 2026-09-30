@@ -131,6 +131,12 @@ main{padding:14px 16px calc(90px + env(safe-area-inset-bottom,0px))}
 .mcol:first-child:hover::after,.mcol:first-child:focus::after{left:0;transform:none}
 .mcol:last-child:hover::after,.mcol:last-child:focus::after{left:auto;right:0;transform:none}
 .bar:focus{outline:none}.bar:focus .fill,.bar:hover .fill{background:var(--red-deep)}
+.cam{position:fixed;inset:0;z-index:90;background:#000;display:flex;flex-direction:column}
+.cam video{flex:1;min-height:0;width:100%;object-fit:contain;background:#000}
+.camctl{display:flex;align-items:center;justify-content:space-between;padding:16px 20px calc(20px + env(safe-area-inset-bottom,0px));background:#000}
+.camctl .btn{background:#222;color:#fff;border-color:#444;width:84px;justify-content:center}
+.shutter{width:72px;height:72px;border-radius:50%;border:4px solid #fff;background:var(--red);box-shadow:0 0 0 3px #000 inset}
+.thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .legend{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px}
 .card .amt{margin-left:auto;font-weight:600;font-size:14px}
 .card.stale{box-shadow:inset 3px 0 0 var(--warn),var(--shadow)}
@@ -354,7 +360,7 @@ async function deleteJobDoc(id){
   const j = S.jobs[id]; delete S.jobs[id]; renderSoon();
   const {error} = await sb.from("jobs").delete().eq("id", id); if(error) writeErr(error);
   if(j){
-    const paths=[...(j.expenses||[]).map(e=>e.assetId),...(j.payments||[]).map(p=>p.assetId),...(j.docs||[]).map(d=>d.assetId)].filter(Boolean);
+    const paths=[...(j.expenses||[]).map(e=>e.assetId),...(j.payments||[]).flatMap(p=>[p.assetId,...(p.photos||[])]),...(j.docs||[]).map(d=>d.assetId)].filter(Boolean);
     if(paths.length) await sb.storage.from(BUCKET).remove(paths);
   }
 }
@@ -375,16 +381,72 @@ function writeErr(e){
 /* Drive filing is paused in the standalone app; files live in the app's own storage. */
 async function fileToDrive(){}
 /* ---------- images / files ---------- */
+/* shrink photos: 1280px long edge, JPEG, stepping quality down until under ~180 KB */
 async function compressImage(file){
-  if(!file.type.startsWith("image/") || file.type==="image/gif") return file;
+  if(!file || !String(file.type||"image/jpeg").startsWith("image/") || file.type==="image/gif") return file;
   try{
     const bmp = await createImageBitmap(file);
-    const max = 1600, sc = Math.min(1, max/Math.max(bmp.width,bmp.height));
+    const max = 1280, sc = Math.min(1, max/Math.max(bmp.width,bmp.height));
     const c = document.createElement("canvas"); c.width=Math.round(bmp.width*sc); c.height=Math.round(bmp.height*sc);
-    c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);
-    const b = await new Promise(r=>c.toBlob(r,"image/jpeg",0.78));
-    return b || file;
+    const g = c.getContext("2d"); g.fillStyle="#fff"; g.fillRect(0,0,c.width,c.height); g.drawImage(bmp,0,0,c.width,c.height);
+    let out=null;
+    for(const q of [0.62,0.52,0.42,0.34]){
+      out = await new Promise(r=>c.toBlob(r,"image/jpeg",q));
+      if(out && out.size <= 180000) break;
+    }
+    return (out && out.size < file.size) ? out : (out || file);
   }catch(e){ return file; }
+}
+/* camera inside the app, so Android never has to leave the CRM */
+function openCamera(){
+  return new Promise(async resolve=>{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ resolve(undefined); return; }
+    let stream;
+    try{ stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1440}}, audio:false}); }
+    catch(e){ resolve(e && e.name==="NotAllowedError" ? "denied" : undefined); return; }
+    const el=document.createElement("div"); el.className="cam";
+    el.innerHTML=`<video playsinline autoplay muted></video><div class="camctl"><button type="button" class="btn" data-c="x">Cancel</button><button type="button" class="shutter" data-c="snap" aria-label="Take photo"></button><span style="width:84px"></span></div>`;
+    document.body.appendChild(el);
+    const v=el.querySelector("video"); v.srcObject=stream;
+    const done=b=>{ stream.getTracks().forEach(t=>t.stop()); el.remove(); resolve(b); };
+    el.addEventListener("click", e=>{
+      const c=e.target.closest("[data-c]"); if(!c) return;
+      if(c.dataset.c==="x") return done(null);
+      if(!v.videoWidth) return;
+      const cv=document.createElement("canvas"); cv.width=v.videoWidth; cv.height=v.videoHeight;
+      cv.getContext("2d").drawImage(v,0,0); cv.toBlob(b=>done(b),"image/jpeg",0.9);
+    });
+  });
+}
+function photoPickerHTML(pfx, what){
+  return `<div class="grid2">
+      <button type="button" class="btn block" id="${pfx}-cam">📷 Take photo</button>
+      <span class="btn block filebtn">🖼 Upload from gallery<input id="${pfx}-lib" type="file" accept="image/*" aria-label="Upload ${what} from gallery"></span>
+    </div>
+    <input id="${pfx}-camfile" class="vh" type="file" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">
+    <img id="${pfx}-prev" alt="${what} preview" hidden style="max-height:180px;border-radius:8px;object-fit:contain;background:var(--sunk)">
+    <p class="small muted" style="margin:0" id="${pfx}-msg"></p>`;
+}
+function wirePhotoPicker(box, pfx, onPhoto){
+  const msg=box.querySelector(`#${pfx}-msg`);
+  const use = async blob=>{
+    if(!blob) return;
+    msg.textContent="Shrinking photo…";
+    const small = await compressImage(blob);
+    const im=box.querySelector(`#${pfx}-prev`); im.src=URL.createObjectURL(small); im.hidden=false;
+    msg.textContent=`Photo added (${Math.max(1,Math.round(small.size/1024))} KB). Tap a button to replace it.`;
+    onPhoto(small);
+  };
+  const onFile = e=>{ const f=e.target.files[0]; e.target.value=""; use(f); };
+  box.querySelector(`#${pfx}-lib`).addEventListener("change", onFile);
+  box.querySelector(`#${pfx}-camfile`).addEventListener("change", onFile);
+  box.querySelector(`#${pfx}-cam`).addEventListener("click", async ()=>{
+    const r = await openCamera();
+    if(r instanceof Blob) return use(r);
+    if(r===null) return;
+    if(r==="denied"){ msg.textContent="Camera is blocked for this app. Allow camera in Chrome's site settings, or use Upload from gallery."; return; }
+    box.querySelector(`#${pfx}-camfile`).click();
+  });
 }
 const ASSET_TYPES = ["image/png","image/jpeg","image/gif","image/webp","application/pdf"];
 async function storeAsset(blob, type, jobId){
@@ -413,9 +475,11 @@ async function flushUrls(){
   const paths=[...urlQueue]; urlQueue=new Set(); urlTimer=null;
   if(!paths.length) return;
   const {data, error} = await sb.storage.from(BUCKET).createSignedUrls(paths, 3600);
-  if(error || !data) return;
-  data.forEach(d=>{ if(d.signedUrl) URLS[d.path]={url:d.signedUrl, exp:Date.now()+50*60e3}; });
-  renderSoon();
+  let got=0;
+  (data||[]).forEach(d=>{ if(d && d.signedUrl && d.path){ URLS[d.path]={url:d.signedUrl, exp:Date.now()+50*60e3}; got++; } });
+  /* anything that couldn't be signed waits a minute before trying again (prevents a redraw loop) */
+  paths.forEach(p=>{ if(!URLS[p] || URLS[p].exp<=Date.now()) URLS[p]={url:"", exp:Date.now()+60e3}; });
+  if(got && !error) renderSoon();
 }
 async function fileBlob(p){
   const {data, error} = await sb.storage.from(BUCKET).download(p);
@@ -820,7 +884,8 @@ function jobMoney(j,c){
     <button class="btn block" data-act="addPayment">+ Record payment</button>
     ${pay.length?`<div class="list">${pay.map(p=>`<div class="li">
       <div class="grow"><div class="t num">${money(n(p.amount),1)} · ${esc(p.method)}</div><div class="s">${fdate(p.date)} · Receipt ${esc(p.receiptNo||"")}${p.note?" · "+esc(p.note):""}</div>
-      <div class="row" style="margin-top:6px;gap:6px">${p.assetId?`<a class="btn small" href="${urlFor(p.assetId)||"#"}" target="_blank" rel="noopener">View receipt</a><button class="btn small primary" data-act="dlReceipt" data-item="${esc(p.id)}">Send / save</button>`:""}</div></div>
+      <div class="row" style="margin-top:6px;gap:6px">${p.assetId?`<a class="btn small" href="${urlFor(p.assetId)||"#"}" target="_blank" rel="noopener">View receipt</a><button class="btn small primary" data-act="dlReceipt" data-item="${esc(p.id)}">Send / save</button>`:""}<button class="btn small" data-act="addPayPhoto" data-item="${esc(p.id)}">+ Photo</button></div>
+      ${(p.photos||[]).length?`<div class="thumbs">${p.photos.map(ph=>`<a href="${urlFor(ph)||"#"}" target="_blank" rel="noopener"><img class="thumb" src="${urlFor(ph)||PIXEL}" alt="Check or payment photo"></a>`).join("")}</div>`:""}</div>
       ${S.isOwner?`<button class="btn small ghost danger" data-act="delItem" data-list="payments" data-item="${esc(p.id)}" aria-label="Delete payment">✕</button>`:""}
     </div>`).join("")}</div>`:""}
     <div class="tot num"><span>Balance due</span><span>${money(c.balance,1)}</span></div>
@@ -931,13 +996,7 @@ function contactLog(kind){
 function addExpense(){
   const j=S.jobs[S.openJob]; if(!j) return;
   openModal(`<h2>Add expense</h2>
-    <div class="grid2">
-      <span class="btn block filebtn">🖼 Upload from photos<input id="ex-photo" type="file" accept="image/*" aria-label="Upload receipt from photos"></span>
-      <span class="btn block filebtn">📷 Take photo<input id="ex-photo-cam" type="file" accept="image/*" capture="environment" aria-label="Take receipt photo"></span>
-    </div>
-    <p class="small muted" style="margin:0" id="ex-photo-lbl">If Take photo doesn't open, snap the receipt with your camera app and use Upload from photos.</p>
-
-    <img id="ex-prev" alt="Receipt preview" hidden style="max-height:180px;border-radius:8px;object-fit:contain;background:var(--sunk)">
+    ${photoPickerHTML("ex","receipt")}
     <div class="field"><label for="ex-amt">Amount</label><input class="input num" id="ex-amt" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0.00" required></div>
     <div class="field"><span class="label" style="font-size:12px">Category</span><div class="chips">${EXP_CATS.map((c,i)=>`<button type="button" class="chip" data-pick="cat" data-v="${esc(c)}" aria-pressed="${i===0}">${esc(c)}</button>`).join("")}</div></div>
     <div class="grid2"><div class="field"><label for="ex-date">Date</label><input class="input" id="ex-date" type="date" value="${today()}" data-nofocus="1"></div>
@@ -945,17 +1004,7 @@ function addExpense(){
     <div class="row"><button class="btn primary" id="ex-save">Save expense</button><button class="btn ghost" data-act="closeModal">Cancel</button></div>`, box=>{
     chipsPick(box,"cat");
     let photo=null;
-    const onPhoto = async e=>{
-      const f=e.target.files[0]; if(!f) return;
-      box.querySelector("#ex-photo-lbl").textContent="Loading photo…";
-      photo = await compressImage(f);
-      e.target.value="";
-      const im=box.querySelector("#ex-prev"); im.src=URL.createObjectURL(photo); im.hidden=false;
-      box.querySelector("#ex-photo-lbl").textContent="Photo added. Tap a button above to replace it.";
-      box.querySelector("#ex-amt").focus();
-    };
-    box.querySelector("#ex-photo").addEventListener("change", onPhoto);
-    box.querySelector("#ex-photo-cam").addEventListener("change", onPhoto);
+    wirePhotoPicker(box, "ex", b=>{ photo=b; box.querySelector("#ex-amt").focus(); });
     box.querySelector("#ex-save").addEventListener("click", async ()=>{
       const amt=n(box.querySelector("#ex-amt").value);
       if(!amt){ box.querySelector("#ex-amt").focus(); toast("Type the amount"); return; }
@@ -1063,8 +1112,10 @@ function addPayment(){
     <div class="grid2"><div class="field"><label for="py-date">Date</label><input class="input" id="py-date" type="date" value="${today()}" data-nofocus="1"></div>
     <div class="field"><label for="py-note">Note (e.g. check #, first ACV check)</label><input class="input" id="py-note" data-nofocus="1"></div></div>
     ${!c.contract?`<p class="small" style="margin:0;color:var(--warn)">Tip: set a contract price on the Money tab so the receipt shows the balance.</p>`:""}
+    <div class="field"><span class="label" style="font-size:12px">Photo of check or payment (optional)</span>${photoPickerHTML("pyp","check")}</div>
     <div class="row"><button class="btn primary" id="py-save">Save and make receipt</button><button class="btn ghost" data-act="closeModal">Cancel</button></div>`, box=>{
     chipsPick(box,"m");
+    let payPhoto=null; wirePhotoPicker(box, "pyp", b=>{ payPhoto=b; });
     box.querySelector("#py-save").addEventListener("click", async ()=>{
       const amt=n(box.querySelector("#py-amt").value);
       if(!amt){ toast("Type the amount"); box.querySelector("#py-amt").focus(); return; }
@@ -1072,11 +1123,12 @@ function addPayment(){
       const btn=box.querySelector("#py-save"); btn.disabled=true; btn.textContent="Making receipt…";
       const no = (S.settings.receiptNo||0)+1;
       await saveSettings({receiptNo:no});
-      const item={id:rid(), amount:amt, method:picked(box,"m"), date:dateVal(box.querySelector("#py-date").value), note:box.querySelector("#py-note").value.trim(), desc:box.querySelector("#py-desc").value.trim(), receiptNo:"RH-"+String(no).padStart(4,"0"), assetId:null, drive:null};
+      const item={id:rid(), amount:amt, method:picked(box,"m"), date:dateVal(box.querySelector("#py-date").value), note:box.querySelector("#py-note").value.trim(), desc:box.querySelector("#py-desc").value.trim(), receiptNo:"RH-"+String(no).padStart(4,"0"), assetId:null, drive:null, photos:[]};
       const jobId=j.id, cur=S.jobs[jobId], cc=calc(cur);
       let pdf=null;
       try{ pdf = receiptPDF(cur, item, {contract:cc.contract, paid:cc.paid+amt}); }catch(e){ toast("Couldn't build the PDF. Payment still saved."); }
       if(pdf){ try{ item.assetId = await storeAsset(pdf, "application/pdf", jobId); }catch(e){ toast(assetErr(e)); } }
+      if(payPhoto){ try{ item.photos.push(await storeAsset(payPhoto, "image/jpeg", jobId)); }catch(e){ toast(assetErr(e)+" Payment saved without the photo."); } }
       await mutateJob(jobId, x=>{ x.payments=x.payments||[]; x.payments.push(item); if(item.desc) x.workDesc=item.desc; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"system",text:`Payment ${money(amt,1)} by ${item.method.toLowerCase()} (receipt ${item.receiptNo})`}); });
       closeModal(); toast("Payment recorded");
       if(pdf && item.assetId) fileToDrive(jobId, "payments", item.id, pdf, `${item.receiptNo} ${cur.name} receipt.pdf`, "application/pdf");
@@ -1162,6 +1214,18 @@ const ACT = {
     mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
   },
   setPath:b=>setPath(S.openJob, b.dataset.v),
+  addPayPhoto:b=>{
+    const id=S.openJob, pid=b.dataset.item;
+    openModal(`<h2>Add check or payment photo</h2>${photoPickerHTML("app","check")}
+      <div class="row"><button class="btn primary" id="app-save" disabled>Save photo</button><button class="btn ghost" data-act="closeModal">Cancel</button></div>`, box=>{
+      let ph=null; wirePhotoPicker(box,"app", x=>{ ph=x; box.querySelector("#app-save").disabled=false; });
+      box.querySelector("#app-save").addEventListener("click", async ()=>{
+        if(!ph) return; const btn=box.querySelector("#app-save"); btn.disabled=true; btn.textContent="Saving…";
+        try{ const path=await storeAsset(ph,"image/jpeg",id); await mutateJob(id, x=>{ const p=(x.payments||[]).find(y=>y.id===pid); if(p){ p.photos=p.photos||[]; p.photos.push(path); } }); closeModal(); toast("Photo saved"); }
+        catch(e){ btn.disabled=false; btn.textContent="Save photo"; toast(assetErr(e)); }
+      });
+    });
+  },
   ackAttn:b=>{ const id=b.dataset.id||S.openJob, j=S.jobs[id]; if(!j) return; const l=ageLevel(j);
     mutateJob(id, x=>{ x.attnAck=Math.max(x.attnAck||0,l); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"system",text:`Marked handled at ${ageDays(x)} days old`}); }); toast("Cleared until "+(l<60?(l===15?"30":"60")+" days":"it closes")); },
   reopen:b=>{
@@ -1180,7 +1244,7 @@ const ACT = {
     confirmBox("Delete "+labels[list]+"?", "This can't be undone. Any copy already in Google Drive stays there.", "Delete", async ()=>{
       const it=(S.jobs[id]?.[list]||[]).find(x=>x.id===item);
       await mutateJob(id, x=>{ x[list]=(x[list]||[]).filter(y=>y.id!==item); });
-      if(it && it.assetId){ await sb.storage.from(BUCKET).remove([it.assetId]); }
+      if(it){ const ps=[it.assetId,...(it.photos||[])].filter(Boolean); if(ps.length) await sb.storage.from(BUCKET).remove(ps); }
       toast("Deleted");
     });
   },
