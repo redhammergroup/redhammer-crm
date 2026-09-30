@@ -300,7 +300,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Sep 30 · sub W-9s";
+const APP_VERSION = "Sep 30 · storage + backup";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -753,6 +753,51 @@ function renderMain(){
   else m.innerHTML = banner + settingsView();
 }
 
+/* ----- storage meter & backups ----- */
+const PLAN = {files:1024**3, db:500*1024**2};
+const fmtBytes = b => b>=1024**3 ? (b/1024**3).toFixed(2)+" GB" : b>=1024**2 ? (b/1024**2).toFixed(b>=100*1024**2?0:1)+" MB" : Math.max(1,Math.round(b/1024))+" KB";
+function meter(label, used, cap){
+  const pct=Math.min(100, used/cap*100), cls=pct>=90?"var(--red)":pct>=75?"var(--warn)":"var(--good)";
+  return `<div class="bar"><div class="top2"><span>${label}</span><b class="num">${fmtBytes(used)} of ${fmtBytes(cap)}</b></div>
+    <div class="track" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}" aria-label="${label} used"><div class="fill" style="width:${Math.max(pct,1)}%;background:${cls}"></div></div>
+    <div class="small muted" style="margin-top:2px">${pct.toFixed(pct<10?1:0)}% used</div></div>`;
+}
+function usageHTML(){
+  const u=S.usage;
+  if(u===undefined){ loadUsage(); return `<p class="small muted" style="margin:0">Checking storage…</p>`; }
+  if(u===null) return `<p class="small muted" style="margin:0">Storage meter isn't set up yet. Ask Claude for the storage-meter.sql snippet, or paste it in Supabase → SQL Editor.</p>`;
+  const warn = u.files_bytes/PLAN.files>=0.8 ? `<p class="small" style="margin:0;color:var(--warn);font-weight:700">Getting close to the free limit. The paid Supabase plan raises it to 100 GB.</p>` : "";
+  return `<div class="bars">${meter("Photos & files", u.files_bytes, PLAN.files)}${meter("Jobs & records", u.db_bytes, PLAN.db)}</div>
+    <p class="small muted" style="margin:6px 0 0">${u.files_count} file${u.files_count===1?"":"s"} stored. Limits shown are the free plan.</p>${warn}`;
+}
+let usageLoading=false;
+async function loadUsage(){
+  if(usageLoading) return; usageLoading=true;
+  const {data, error}=await sb.rpc("storage_usage");
+  S.usage = (error || !data) ? null : data; usageLoading=false;
+  const box=$("#usageBox"); if(box) box.innerHTML=usageHTML();
+}
+function saveFile(name, text, type){
+  const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([text],{type})); a.download=name; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
+const stamp = () => new Date().toISOString().slice(0,10);
+function backupJson(){
+  const data={app:"Red Hammer CRM", version:APP_VERSION, exportedAt:new Date().toISOString(), settings:S.settings, jobs:Object.values(S.jobs)};
+  saveFile(`redhammer-backup-${stamp()}.json`, JSON.stringify(data,null,1), "application/json");
+  saveSettings({lastBackupAt:Date.now()}); toast("Backup downloaded");
+}
+function backupCsv(){
+  const q=v=>{ const t=String(v??""); return /[",\n]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t; };
+  const d=t=>t?new Date(t).toLocaleDateString("en-US"):"";
+  const head=["Board","Stage","Name","Phone","Email","Address","Lead source","Appointment","Added","Contract","Expenses","Paid by customer","Balance due","Profit","Partner share","You keep","Signed contingency","Lost","Lost reason","Insurance","Claim #"];
+  const rows=Object.values(S.jobs).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0)).map(j=>{ const c=calc(j);
+    return [tradeName(j.trade), j.lost?"Lost":j.stage, j.name, j.phone, j.email, j.address, srcLabel(j), j.appointmentAt?new Date(j.appointmentAt).toLocaleString("en-US"):"", d(j.createdAt),
+      c.contract.toFixed(2), c.expenses.toFixed(2), c.paid.toFixed(2), c.balance.toFixed(2), c.profit.toFixed(2), c.cut.toFixed(2), c.net.toFixed(2), j.signedAt?d(j.signedAt):"", j.lost?"Yes":"", j.lostReason, j.carrier, j.claimNo].map(q).join(","); });
+  saveFile(`redhammer-customers-${stamp()}.csv`, "\ufeff"+[head.join(","),...rows].join("\r\n"), "text/csv");
+  toast("Customer list downloaded");
+}
+
 /* ----- partner portal (e.g. Tony): only their own leads, read-only, plus a lead form ----- */
 function renderPartner(){
   $("#nav").hidden=true; $("#fab").hidden=true;
@@ -1089,6 +1134,13 @@ function settingsView(){
         ${contacts(kind).length?`<div class="list">${contacts(kind).map(c=>`<div class="li"><div class="grow"><div class="t">${esc(c.name)}</div><div class="s">${[c.company,c.trade,c.phone].filter(Boolean).map(esc).join(" · ")}${kind==="subs"?` · ${c.w9Path?"W-9 ✓":"W-9 missing"} · paid ${new Date().getFullYear()}: ${money(subPayments(c.id,...yearRange(new Date().getFullYear())).reduce((a,p)=>a+n(p.amount),0))}`:""}</div></div>
           ${kind==="subs"?`<button class="btn small" data-act="subProfile" data-id="${esc(c.id)}">W-9 & payments</button>`:""}<button class="btn small" data-act="editContact" data-kind="${kind}" data-id="${esc(c.id)}">Edit</button></div>`).join("")}</div>`:""}
         <button class="btn small" data-act="editContact" data-kind="${kind}" data-id="">+ Add ${K.one}</button></div>`).join("")}
+    </div>
+    <div class="panel stack"><h3 class="sec">Storage & backup</h3>
+      <div id="usageBox">${usageHTML()}</div>
+      ${(()=>{ const lb=S.settings.lastBackupAt, days=lb?Math.floor((Date.now()-lb)/864e5):null, late=days===null||days>30;
+        return `<p class="small" style="margin:0;${late?"color:var(--warn);font-weight:700":""}">${lb?`Last backup: ${fdate(lb)} (${days===0?"today":days+" day"+(days===1?"":"s")+" ago"})`:"No backup yet"}${late?" · download one now":""}</p>`; })()}
+      <div class="row"><button class="btn primary" data-act="backupJson">Download full backup</button><button class="btn" data-act="backupCsv">Customer list (Excel)</button></div>
+      <p class="small muted" style="margin:0">The full backup saves every job, customer, note, expense, payment and setting to one file on this device. Photos and PDFs stay in your database. Once a month is plenty.</p>
     </div>
     <div class="panel stack"><h3 class="sec">Alarms on your phone</h3>
       <p class="small muted" style="margin:0">Get an alarm 1 hour before every appointment, and an alert when Tony submits a lead. One-time setup:</p>
@@ -1612,7 +1664,7 @@ function editPartner(id){
 /* ---------- actions ---------- */
 const ACT = {
   trade:b=>{ S.trade=b.dataset.v; try{localStorage.setItem("rh-trade",S.trade);}catch(e){} render(); },
-  view:b=>{ S.view=b.dataset.v; S.openJob=null; render(); window.scrollTo(0,0); },
+  view:b=>{ S.view=b.dataset.v; S.openJob=null; if(S.view==="settings") S.usage=undefined; render(); window.scrollTo(0,0); },
   open:b=>{ if($("#modal").innerHTML) closeModal(); S.openJob=b.dataset.id; S.jobTab="info"; render(); },
   close:()=>{ S.openJob=null; render(); },
   jtab:b=>{ S.jobTab=b.dataset.v; render(); const sh=$("#sheet .sheet"); if(sh) sh.scrollTop=0; },
@@ -1634,6 +1686,7 @@ const ACT = {
     mutateJob(id, x=>{ const d=(x.docs||[]).find(y=>y.id===did); if(d) d.total=v; x.contract=v; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"system",text:`Contract price set to ${money(v,1)} from estimate ${d?d.name:""}`}); });
     toast("Contract price set to "+money(v,1)); },
   editContact:b=>editContact(b.dataset.kind, b.dataset.id),
+  backupJson:()=>backupJson(), backupCsv:()=>backupCsv(),
   subProfile:b=>subProfile(b.dataset.id),
   subToExpense:b=>{ const id=S.openJob, sid=b.dataset.item, j=S.jobs[id]; const a=(j.subs||[]).find(y=>y.id===sid); if(!a) return;
     const pin=document.getElementById("sb-price-"+sid); if(pin && pin.value!=="" && n(pin.value)!==n(a.price)) a.price=n(pin.value);
@@ -1878,6 +1931,7 @@ async function loadAll(){
   if(fix.length) await sb.from("jobs").upsert(fix.map(row));
   if(!S.settings.notifyTopic){ await saveSettings({notifyTopic:"rh-"+Array.from(crypto.getRandomValues(new Uint8Array(12)),b=>b.toString(36).padStart(2,"0")).join("").slice(0,20)}); syncPartnerAccounts(); }
   sweepAlarms();
+  const lb=S.settings.lastBackupAt; if(!S.nudged && Object.keys(S.jobs).length && (!lb || Date.now()-lb>35*864e5)){ S.nudged=true; setTimeout(()=>toast("Reminder: download a backup in Settings"), 2500); }
 }
 function subscribe(){
   if(channel) sb.removeChannel(channel);
