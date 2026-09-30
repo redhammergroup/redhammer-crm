@@ -27,7 +27,7 @@
   --red:#A8201E; --red-deep:#8C1D1D; --red-tint:rgba(168,32,30,.09);
   --bar:#2A2A28; --bar-ink:#F5F1EA; --bar-muted:#B9B2A5;
   --good:#2E7A4C; --good-tint:rgba(46,122,76,.12); --warn:#A86A12; --warn-tint:rgba(168,106,18,.13);
-  --a15:#8A6D00; --a15-t:rgba(200,160,0,.18); --a30:#B8500A; --a30-t:rgba(214,110,20,.16); --a60:#A8201E; --a60-t:rgba(168,32,30,.13);
+  --built:#1F5F8B; --a15:#8A6D00; --a15-t:rgba(200,160,0,.18); --a30:#B8500A; --a30-t:rgba(214,110,20,.16); --a60:#A8201E; --a60-t:rgba(168,32,30,.13);
   --p-re:#A86A12; --p-re-t:rgba(168,106,18,.14); --p-ap:#2A5CA6; --p-ap-t:rgba(42,92,166,.12); --p-pa:#7B3D9C; --p-pa-t:rgba(123,61,156,.12);
   --shadow:0 1px 2px rgba(42,42,40,.08),0 2px 8px rgba(42,42,40,.06);
   --f-display:"Barlow Condensed","Arial Narrow",Calibri,sans-serif;
@@ -39,7 +39,7 @@
   --red:#D4463E; --red-deep:#B8322B; --red-tint:rgba(212,70,62,.16);
   --bar:#111110; --bar-ink:#F5F1EA; --bar-muted:#9C968B;
   --good:#5DB47E; --good-tint:rgba(93,180,126,.16); --warn:#E0A43E; --warn-tint:rgba(224,164,62,.16);
-  --a15:#E6C84A; --a15-t:rgba(230,200,74,.18); --a30:#F0924E; --a30-t:rgba(240,146,78,.18); --a60:#F07A70; --a60-t:rgba(240,122,112,.18);
+  --built:#5AA7DB; --a15:#E6C84A; --a15-t:rgba(230,200,74,.18); --a30:#F0924E; --a30-t:rgba(240,146,78,.18); --a60:#F07A70; --a60-t:rgba(240,122,112,.18);
   --p-re:#E0A43E; --p-re-t:rgba(224,164,62,.18); --p-ap:#7FA7EC; --p-ap-t:rgba(127,167,236,.18); --p-pa:#C993E6; --p-pa-t:rgba(201,147,230,.18);
   --shadow:0 1px 2px rgba(0,0,0,.4); color-scheme:dark}}
 :root[data-theme="dark"]{
@@ -47,7 +47,7 @@
   --red:#D4463E; --red-deep:#B8322B; --red-tint:rgba(212,70,62,.16);
   --bar:#111110; --bar-ink:#F5F1EA; --bar-muted:#9C968B;
   --good:#5DB47E; --good-tint:rgba(93,180,126,.16); --warn:#E0A43E; --warn-tint:rgba(224,164,62,.16);
-  --a15:#E6C84A; --a15-t:rgba(230,200,74,.18); --a30:#F0924E; --a30-t:rgba(240,146,78,.18); --a60:#F07A70; --a60-t:rgba(240,122,112,.18);
+  --built:#5AA7DB; --a15:#E6C84A; --a15-t:rgba(230,200,74,.18); --a30:#F0924E; --a30-t:rgba(240,146,78,.18); --a60:#F07A70; --a60-t:rgba(240,122,112,.18);
   --p-re:#E0A43E; --p-re-t:rgba(224,164,62,.18); --p-ap:#7FA7EC; --p-ap-t:rgba(127,167,236,.18); --p-pa:#C993E6; --p-pa-t:rgba(201,147,230,.18);
   --shadow:0 1px 2px rgba(0,0,0,.4); color-scheme:dark}
 html,body{height:100%}
@@ -138,6 +138,8 @@ main{padding:14px 16px calc(90px + env(safe-area-inset-bottom,0px))}
 .camctl .btn{background:#222;color:#fff;border-color:#444;width:84px;justify-content:center}
 .shutter{width:72px;height:72px;border-radius:50%;border:4px solid #fff;background:var(--red);box-shadow:0 0 0 3px #000 inset}
 .thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.pill.built{background:var(--built);color:#fff;font-weight:700;letter-spacing:.02em}
+.card.builtc{box-shadow:inset 4px 0 0 var(--built),var(--shadow);border-color:var(--built)}
 .pill.signed{background:var(--good);color:#fff;font-weight:700;letter-spacing:.02em}
 .card.signedc{box-shadow:inset 4px 0 0 var(--good),var(--shadow);border-color:var(--good)}
 .dropzone{border:2px dashed var(--line);border-radius:var(--r);padding:22px 14px;display:grid;justify-items:center;gap:4px;text-align:center;background:var(--sunk)}
@@ -300,7 +302,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Sep 30 · storage + backup";
+const APP_VERSION = "Sep 30 · built mark";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -826,7 +828,7 @@ function renderPartner(){
     <p class="small muted" style="margin:0"><b>Opened</b>: Gabriel is working it. <b>Signed</b>: the homeowner signed the contingency. <b>Dead</b>: it didn't go anywhere. "In the pipeline" is your expected share on open jobs; you earn it when a job is complete.</p>
     ${jobs.length?[["Upcoming appointments",jobs.filter(j=>isOpen(j)&&j.stage==="Appointment").sort((a,b)=>(a.appointmentAt||0)-(b.appointmentAt||0))],["Signed",jobs.filter(j=>isOpen(j)&&j.stage!=="Appointment"&&j.signedAt)],["Opened",jobs.filter(j=>isOpen(j)&&j.stage!=="Appointment"&&!j.signedAt)],["Completed",jobs.filter(j=>!j.lost&&isClosed(j))],["Dead",jobs.filter(j=>j.lost)]].filter(g=>g[1].length).map(([label,list])=>`<div class="panel stack" style="gap:4px"><h3 class="sec">${label} <span class="r small muted" style="font-family:var(--f-body);letter-spacing:0;text-transform:none;font-weight:400">${list.length}</span></h3><div class="list">${list.map(j=>{ const c=calc(j); return `<div class="li" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer">
       <div class="grow"><div class="t">${esc(j.name||"No name")}</div>
-      <div class="s">${j.signedAt&&!j.lost?`<span class="pill signed" style="font-size:11px;padding:2px 6px">✓ Signed</span> `:""}${j.lost?"Dead":esc(j.stage)}${j.appointmentAt?" · 📅 "+esc(fdtLong(j.appointmentAt)):""}${j.address?" · "+esc(j.address):""}</div></div>
+      <div class="s">${j.builtAt&&!j.lost?`<span class="pill built" style="font-size:11px;padding:2px 6px">🏠 Built</span> `:""}${j.signedAt&&!j.lost?`<span class="pill signed" style="font-size:11px;padding:2px 6px">✓ Signed</span> `:""}${j.lost?"Dead":esc(j.stage)}${j.appointmentAt?" · 📅 "+esc(fdtLong(j.appointmentAt)):""}${j.address?" · "+esc(j.address):""}</div></div>
       <div style="text-align:right"><b class="num">${j.lost?"—":c.contract?money(c.cut):"—"}</b><div class="s small muted">${j.lost?"":paidOut(j)>=c.cut&&c.cut>0?"paid":paidOut(j)>0?money(paidOut(j))+" paid":"your share"}</div></div></div>`; }).join("")}</div></div>`).join("")
       :`<div class="emptybox"><b>No appointments yet</b>Tap <b>Set appointment</b> to book Gabriel your first one.</div>`}
     <div class="row"><button class="btn" data-act="signOut">Sign out</button></div>
@@ -886,6 +888,7 @@ function renderPartnerSheet(){
       <div class="panel stack"><h3 class="sec">Details</h3><div class="list">
         <div class="li"><div class="grow">Stage</div><b>${j.lost?"Dead":esc(j.stage)}</b></div>
         ${j.signedAt&&!j.lost?`<div class="li"><div class="grow">Contingency</div><span class="pill signed">✓ Signed ${fdate(j.signedAt)}</span></div>`:""}
+        ${j.builtAt&&!j.lost?`<div class="li"><div class="grow">House</div><span class="pill built">🏠 Built ${fdate(j.builtAt)}</span></div>`:""}
         ${j.appointmentAt?`<div class="li"><div class="grow">Appointment</div><b>${esc(fdtLong(j.appointmentAt))}</b></div>`:""}
         ${j.phone?`<div class="li"><div class="grow">Phone</div><b>${esc(j.phone)}</b></div>`:""}
         ${j.address?`<div class="li"><div class="grow">Address</div><a href="${esc(mapsUrl(j.address))}" target="_blank" rel="noopener" style="text-align:right;font-weight:700;color:var(--ink);text-decoration:underline">📍 ${esc(j.address)}</a></div>`:""}
@@ -939,8 +942,9 @@ function renderLogin(){
 function cardHTML(j){
   const c = calc(j), lvl = ageLevel(j), attn = needsAttn(j);
   const partner = partnerFor(j);
-  return `<button class="card ${j.signedAt&&!j.lost?"signedc":lvl?"attn"+lvl:""}" draggable="true" data-act="open" data-id="${esc(j.id)}">
-    ${(j.signedAt&&!j.lost)||attn?`<span class="meta">${j.signedAt&&!j.lost?`<span class="pill signed">✓ Signed contingency</span>`:""}${attn?`<span class="pill attn">Needs attention</span>`:""}</span>`:""}
+  const built=j.builtAt&&!j.lost, signed=j.signedAt&&!j.lost;
+  return `<button class="card ${built?"builtc":signed?"signedc":lvl?"attn"+lvl:""}" draggable="true" data-act="open" data-id="${esc(j.id)}">
+    ${built||signed||attn?`<span class="meta">${built?`<span class="pill built">🏠 Built</span>`:""}${signed?`<span class="pill signed">✓ Signed contingency</span>`:""}${attn?`<span class="pill attn">Needs attention</span>`:""}</span>`:""}
     <span class="nm">${esc(j.name||"No name")}</span>
     ${j.address?`<span class="ad">${esc(j.address)}</span>`:""}
     <span class="meta">
@@ -989,7 +993,7 @@ function boardCols(){
     </section>`;
   }).join("");
   return `<div class="board" id="board">${cols}</div>
-    <div class="legend small muted"><span class="pill signed">✓ Signed contingency</span> Lead age: <span class="pill age15">15+ days</span><span class="pill age30">30+ days</span><span class="pill age60">60+ days</span></div>
+    <div class="legend small muted"><span class="pill signed">✓ Signed contingency</span><span class="pill built">🏠 Built</span> Lead age: <span class="pill age15">15+ days</span><span class="pill age30">30+ days</span><span class="pill age60">60+ days</span></div>
     ${S.trade==="roofing"?`<div class="legend small muted">Denied claims: ${PATHS.map(p=>pathPill(p[0])).join("")}</div>`:""}
     <p class="small muted" style="margin:10px 0 0">Swipe for more stages. Drag cards between columns on a computer, or open a job to move it.</p>`;
 }
@@ -1203,6 +1207,9 @@ function jobInfo(j){
     ${j.trade==="roofing" ? (j.signedAt
       ? `<div class="row"><span class="pill signed">✓ Signed contingency · ${fdate(j.signedAt)}</span><button class="btn small ghost" data-act="toggleSigned">Undo</button></div>`
       : `<button class="btn" data-act="toggleSigned" style="border-color:var(--good);color:var(--good)">✓ Mark contingency signed</button>`) : ""}
+    ${j.trade==="roofing" ? (j.builtAt
+      ? `<div class="row"><span class="pill built">🏠 Built · ${fdate(j.builtAt)}</span><button class="btn small ghost" data-act="toggleBuilt">Undo</button></div>`
+      : `<button class="btn" data-act="toggleBuilt" style="border-color:var(--built);color:var(--built)">🏠 Mark house built</button>`) : ""}
   </div>
   <div class="panel stack"><h3 class="sec"><label for="f-appointmentAt">Appointment</label>${j.submittedBy?`<span class="r pill partner" style="font-family:var(--f-body);letter-spacing:0;text-transform:none">From ${esc(j.submittedBy)}</span>`:""}</h3>
     <input class="input" id="f-appointmentAt" data-field="appointmentAt" type="datetime-local" value="${j.appointmentAt?toLocalInput(j.appointmentAt):""}">
@@ -1678,7 +1685,7 @@ const ACT = {
   copy:async b=>{ try{ await navigator.clipboard.writeText(b.dataset.v); toast("Copied"); }catch(e){ toast(b.dataset.v); } },
   stage:b=>{
     const id=S.openJob, st=b.dataset.v, j=S.jobs[id]; if(!j || j.stage===st) return;
-    mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
+    mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; if(st==="Built" && !x.builtAt) x.builtAt=Date.now(); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
   },
   setPath:b=>setPath(S.openJob, b.dataset.v),
   estToContract:b=>{ const id=S.openJob, did=b.dataset.item, inp=document.getElementById("et-"+did); const v=inp?n(inp.value):0;
@@ -1695,6 +1702,9 @@ const ACT = {
     mutateJob(id, x=>{ x.expenses=x.expenses||[]; x.expenses.push({id:eid, amount:n(a.price), category:"Sub labor", date:Date.now(), desc:[c&&c.name, a.scope].filter(Boolean).join(" · "), assetId:null, drive:null, subContactId:a.contactId});
       const s2=(x.subs||[]).find(y=>y.id===sid); if(s2){ s2.expenseId=eid; s2.price=n(a.price); } });
     toast("Added to expenses"); },
+  toggleBuilt:()=>{ const id=S.openJob, j=S.jobs[id]; if(!j) return; const on=!j.builtAt;
+    mutateJob(id, x=>{ x.builtAt = on ? Date.now() : null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:on?"House built":"Built mark removed"}); });
+    toast(on?"Marked built":"Built mark removed"); },
   toggleSigned:()=>{ const id=S.openJob, j=S.jobs[id]; if(!j) return; const on=!j.signedAt;
     mutateJob(id, x=>{ x.signedAt = on ? Date.now() : null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:on?"Contingency signed":"Contingency signed mark removed"}); if(on){ x.lastContact=Date.now(); x.attnAck=Math.max(x.attnAck||0, ageLevel(x)); } });
     toast(on?"Marked signed":"Signed mark removed"); },
@@ -1854,7 +1864,7 @@ document.addEventListener("dragleave", e=>{ const col=e.target.closest?.(".col")
 document.addEventListener("drop", e=>{
   const col=e.target.closest?.(".col"); if(!col) return; e.preventDefault(); col.classList.remove("over");
   const id=e.dataTransfer.getData("text/plain"), st=col.dataset.stage, j=S.jobs[id]; if(!j||j.stage===st) return;
-  mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
+  mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; if(st==="Built" && !x.builtAt) x.builtAt=Date.now(); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
 });
 
 /* after tapping Call / Email, ask how it went when they come back */
