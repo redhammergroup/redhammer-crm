@@ -300,7 +300,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Sep 30 · estimates upload";
+const APP_VERSION = "Sep 30 · sub W-9s";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -357,11 +357,75 @@ function contactSelect(kind, field, val, label){
     <option value="">${esc(label||"Pick "+K.one)}</option>${contacts(kind).map(c=>`<option value="${esc(c.id)}" ${c.id===val?"selected":""}>${esc(c.name)}${c.company?" · "+esc(c.company):""}</option>`).join("")}
     <option value="__new">+ Add new ${K.one}…</option></select>`;
 }
+/* every payment to a sub = a job expense tagged with that sub */
+function subPayments(subId, from, to){
+  const out=[];
+  Object.values(S.jobs).forEach(j=>(j.expenses||[]).forEach(e=>{
+    const linked = e.subContactId===subId || (j.subs||[]).some(a=>a.expenseId===e.id && a.contactId===subId);
+    if(linked && (e.date||0)>=from && (e.date||0)<to) out.push({...e, jobId:j.id, jobName:j.name});
+  }));
+  return out.sort((a,b)=>(b.date||0)-(a.date||0));
+}
+const yearRange = y => [new Date(y,0,1).getTime(), new Date(y+1,0,1).getTime()];
+function subProfile(subId){
+  const c0=contactById("subs",subId); if(!c0) return;
+  const now=new Date(); let yr=now.getFullYear(), from=`${yr}-01-01`, to=`${yr}-12-31`;
+  const draw = box => {
+    const c=contactById("subs",subId)||c0;
+    const f=dateVal(from)-12*3600e3, t=dateVal(to)+12*3600e3;
+    const pays=subPayments(subId, f, t), tot=pays.reduce((a,p)=>a+n(p.amount),0);
+    const [ya,yb]=yearRange(yr), yearTot=subPayments(subId, ya, yb).reduce((a,p)=>a+n(p.amount),0);
+    const th=n(S.settings.threshold1099||2000);
+    const years=[...new Set([now.getFullYear(), ...Object.values(S.jobs).flatMap(j=>(j.expenses||[]).map(e=>new Date(e.date||Date.now()).getFullYear()))])].sort((a,b)=>b-a);
+    box.innerHTML=`<h2>${esc(c.name)}</h2><p class="muted" style="margin:0">${[c.company,c.trade,c.phone].filter(Boolean).map(esc).join(" · ")}</p>
+      <div class="panel stack"><h3 class="sec">W-9</h3>
+        ${c.w9Path?`<div class="row"><span class="pill fresh">✓ W-9 on file · ${fdate(c.w9Date)}</span><a class="btn small" href="${urlFor(c.w9Path)||"#"}" target="_blank" rel="noopener">View</a><button class="btn small ghost danger" id="w9-del">Remove</button></div>`
+          :`<div class="row"><span class="pill stale">W-9 missing</span></div>`}
+        <div class="dropzone" id="w9Drop"><b>${c.w9Path?"Replace W-9":"Drop their W-9 here"}</b><span class="small muted">PDF or photo, stored privately</span>
+          <span class="btn filebtn" style="margin-top:6px">+ Upload W-9<input id="w9Input" type="file" accept="application/pdf,image/*" aria-label="Upload W-9"></span></div>
+        <div class="grid2"><div class="field"><label for="w9-name">Legal / business name on W-9</label><input class="input" id="w9-name" value="${esc(c.w9Name||"")}"></div>
+          <div class="field"><label for="w9-class">Tax classification</label><select class="input" id="w9-class">${["","Individual / sole proprietor","Single-member LLC","LLC (partnership)","LLC (S corp)","LLC (C corp)","S corporation","C corporation","Partnership","Other"].map(o=>`<option ${o===(c.w9Class||"")?"selected":""} value="${esc(o)}">${o||"Pick one"}</option>`).join("")}</select></div></div>
+      </div>
+      <div class="panel stack"><h3 class="sec">Paid to ${esc(c.name)}</h3>
+        <div class="row"><label class="sr" for="sp-year">Year</label><select class="input" id="sp-year" style="width:auto">${years.map(y=>`<option ${y===yr?"selected":""}>${y}</option>`).join("")}</select>
+          <span class="small muted">or pick dates:</span></div>
+        <div class="grid2"><div class="field"><label for="sp-from">From</label><input class="input" id="sp-from" type="date" value="${from}"></div><div class="field"><label for="sp-to">To</label><input class="input" id="sp-to" type="date" value="${to}"></div></div>
+        <div class="tot num"><span>Total for these dates</span><span>${money(tot,1)}</span></div>
+        <div class="small ${yearTot>=th?"":"muted"}" style="${yearTot>=th?"color:var(--warn);font-weight:700":""}">${yr} total: ${money(yearTot,1)}${yearTot>=th?` · over ${money(th)}, you'll likely need to send them a 1099-NEC${c.w9Path?"":" (and you don't have a W-9 yet)"}`:` · 1099 threshold ${money(th)}`}</div>
+        ${pays.length?`<div class="list">${pays.map(p=>`<div class="li"><div class="grow"><div class="t num">${money(n(p.amount),1)}</div><div class="s">${fdate(p.date)} · ${esc(p.jobName||"")}${p.desc?" · "+esc(p.desc):""}</div></div><button class="btn small" data-act="open" data-id="${esc(p.jobId)}">Job</button></div>`).join("")}</div>`
+          :`<p class="small muted" style="margin:0">No payments in these dates. Payments show up here when you log a sub's payment as an expense on a job.</p>`}
+      </div>
+      <div class="row"><button class="btn" data-act="closeModal">Done</button><button class="btn ghost" data-act="editContact" data-kind="subs" data-id="${esc(c.id)}">Edit contact info</button></div>`;
+    const redraw=()=>draw(box);
+    box.querySelector("#sp-year").onchange=e=>{ yr=Number(e.target.value); from=`${yr}-01-01`; to=`${yr}-12-31`; redraw(); };
+    box.querySelector("#sp-from").onchange=e=>{ from=e.target.value||from; redraw(); };
+    box.querySelector("#sp-to").onchange=e=>{ to=e.target.value||to; redraw(); };
+    const saveField=(k,v)=>{ const cc={...(contactById("subs",subId)||c0), [k]:v}; saveContact("subs", cc); };
+    box.querySelector("#w9-name").onchange=e=>saveField("w9Name", e.target.value.trim());
+    box.querySelector("#w9-class").onchange=e=>saveField("w9Class", e.target.value);
+    const up=async file=>{ if(!file) return; let blob=file, type=file.type||"application/pdf";
+      if(type.startsWith("image/")){ blob=await compressImage(file); type="image/jpeg"; }
+      if(!ASSET_TYPES.includes(type)){ toast("Use a PDF or photo"); return; }
+      toast("Uploading W-9…");
+      try{ const path=await storeAsset(blob, type, "contacts/"+subId); const old=(contactById("subs",subId)||{}).w9Path;
+        await saveContact("subs", {...(contactById("subs",subId)||c0), w9Path:path, w9Date:Date.now()});
+        if(old) sb.storage.from(BUCKET).remove([old]); toast("W-9 saved"); redraw(); }catch(e){ toast(assetErr(e)); } };
+    box.querySelector("#w9Input").onchange=e=>{ const fl=e.target.files[0]; e.target.value=""; up(fl); };
+    const dz=box.querySelector("#w9Drop");
+    dz.addEventListener("dragover", e=>{ e.preventDefault(); e.stopPropagation(); dz.classList.add("over"); });
+    dz.addEventListener("dragleave", ()=>dz.classList.remove("over"));
+    dz.addEventListener("drop", e=>{ e.preventDefault(); e.stopPropagation(); dz.classList.remove("over"); up(e.dataTransfer.files[0]); });
+    box.querySelector("#w9-del")?.addEventListener("click", ()=>{ const cc={...(contactById("subs",subId)||c0)}; const old=cc.w9Path; delete cc.w9Path; delete cc.w9Date; saveContact("subs", cc).then(()=>{ if(old) sb.storage.from(BUCKET).remove([old]); redraw(); }); });
+    if(c.w9Path && !urlFor(c.w9Path)) setTimeout(()=>{ if(box.isConnected) redraw(); }, 800);
+  };
+  openModal(`<div id="spbox" class="stack"></div>`, box=>draw(box.querySelector("#spbox")));
+}
 function contactCard(kind, c, extra=""){
   if(!c) return "";
   return `<div class="cline" style="gap:6px"><div class="grow" style="flex:1;min-width:150px"><div class="t">${esc(c.name)}</div><div class="s small muted">${[c.company,c.trade,c.phone,c.email].filter(Boolean).map(esc).join(" · ")}</div>${c.notes?`<div class="s small muted">${esc(c.notes)}</div>`:""}</div>
     ${c.phone?`<a class="btn small primary" href="tel:${esc(digits(c.phone))}">Call</a><a class="btn small" href="sms:${esc(digits(c.phone))}">Text</a>`:""}
     ${c.email?`<a class="btn small" href="mailto:${esc(c.email)}">Email</a>`:""}
+    ${kind==="subs"?`<button class="btn small" data-act="subProfile" data-id="${esc(c.id)}">${c.w9Path?"✓ W-9":"W-9 missing"} · payments</button>`:""}
     <button class="btn small ghost" data-act="editContact" data-kind="${kind}" data-id="${esc(c.id)}">Edit</button>${extra}</div>`;
 }
 function editContact(kind, id, onSaved){
@@ -1020,8 +1084,10 @@ function settingsView(){
     </div>
     <div class="panel stack"><h3 class="sec">Contacts</h3>
       <p class="small muted" style="margin:0">Supplementers and subs you've saved. They show up as dropdowns on every job.</p>
+      <div class="field"><label for="th1099">1099 reporting threshold (per sub, per year)</label><input class="input num" id="th1099" type="number" inputmode="decimal" step="1" value="${n(S.settings.threshold1099||2000)}" style="max-width:160px"></div>
       ${Object.entries(CONTACT_KINDS).map(([kind,K])=>`<div><div class="label" style="margin:6px 0 2px">${K.title}s · ${contacts(kind).length}</div>
-        ${contacts(kind).length?`<div class="list">${contacts(kind).map(c=>`<div class="li"><div class="grow"><div class="t">${esc(c.name)}</div><div class="s">${[c.company,c.trade,c.phone].filter(Boolean).map(esc).join(" · ")}</div></div><button class="btn small" data-act="editContact" data-kind="${kind}" data-id="${esc(c.id)}">Edit</button></div>`).join("")}</div>`:""}
+        ${contacts(kind).length?`<div class="list">${contacts(kind).map(c=>`<div class="li"><div class="grow"><div class="t">${esc(c.name)}</div><div class="s">${[c.company,c.trade,c.phone].filter(Boolean).map(esc).join(" · ")}${kind==="subs"?` · ${c.w9Path?"W-9 ✓":"W-9 missing"} · paid ${new Date().getFullYear()}: ${money(subPayments(c.id,...yearRange(new Date().getFullYear())).reduce((a,p)=>a+n(p.amount),0))}`:""}</div></div>
+          ${kind==="subs"?`<button class="btn small" data-act="subProfile" data-id="${esc(c.id)}">W-9 & payments</button>`:""}<button class="btn small" data-act="editContact" data-kind="${kind}" data-id="${esc(c.id)}">Edit</button></div>`).join("")}</div>`:""}
         <button class="btn small" data-act="editContact" data-kind="${kind}" data-id="">+ Add ${K.one}</button></div>`).join("")}
     </div>
     <div class="panel stack"><h3 class="sec">Alarms on your phone</h3>
@@ -1043,7 +1109,6 @@ function settingsView(){
       <div class="list small">
         <div class="li"><div class="grow"><div class="t">Estimator</div><div class="s">Create estimates from a job, prefilled from the card</div></div></div>
         <div class="li"><div class="grow"><div class="t">Google Drive copies</div><div class="s">Automatic backup of files to your Drive</div></div></div>
-        <div class="li"><div class="grow"><div class="t">Partner lead form and login</div><div class="s">He submits leads and sees only his jobs</div></div></div>
       </div>
     </div>
   </div>`;
@@ -1198,7 +1263,7 @@ function jobMoney(j,c){
     <button class="btn primary block" data-act="addExpense">+ Add expense</button>
     ${ex.length?`<div class="list">${ex.map(e=>`<div class="li">
       ${e.assetId?`<a href="${urlFor(e.assetId)||"#"}" target="_blank" rel="noopener"><img class="thumb" src="${urlFor(e.assetId)||PIXEL}" alt="Receipt photo"></a>`:`<div class="thumb">No photo</div>`}
-      <div class="grow"><div class="t num">${money(n(e.amount),1)} · ${esc(e.category)}</div><div class="s">${fdate(e.date)}${e.desc?" · "+esc(e.desc):""}</div>${e.assetId?`<div style="margin-top:4px">${driveTag({...e,_list:"expenses"})}</div>`:""}</div>
+      <div class="grow"><div class="t num">${money(n(e.amount),1)} · ${esc(e.category)}${e.subContactId&&contactById("subs",e.subContactId)?" · "+esc(contactById("subs",e.subContactId).name):""}</div><div class="s">${fdate(e.date)}${e.desc?" · "+esc(e.desc):""}</div>${e.assetId?`<div style="margin-top:4px">${driveTag({...e,_list:"expenses"})}</div>`:""}</div>
       ${S.isOwner?`<button class="btn small ghost danger" data-act="delItem" data-list="expenses" data-item="${esc(e.id)}" aria-label="Delete expense">✕</button>`:""}
     </div>`).join("")}</div>`:`<p class="small muted" style="margin:0">No expenses yet. Snap a receipt and type the amount.</p>`}
   </div>
@@ -1340,17 +1405,19 @@ function addExpense(){
     ${photoPickerHTML("ex","receipt")}
     <div class="field"><label for="ex-amt">Amount</label><input class="input num" id="ex-amt" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0.00" required></div>
     <div class="field"><span class="label" style="font-size:12px">Category</span><div class="chips">${EXP_CATS.map((c,i)=>`<button type="button" class="chip" data-pick="cat" data-v="${esc(c)}" aria-pressed="${i===0}">${esc(c)}</button>`).join("")}</div></div>
+    <div class="field" id="ex-subwrap" hidden><label for="ex-sub">Paid to (sub)</label><select class="input" id="ex-sub" data-nofocus="1"><option value="">Pick a sub</option>${contacts("subs").map(c=>`<option value="${esc(c.id)}">${esc(c.name)}${c.company?" · "+esc(c.company):""}</option>`).join("")}</select></div>
     <div class="grid2"><div class="field"><label for="ex-date">Date</label><input class="input" id="ex-date" type="date" value="${today()}" data-nofocus="1"></div>
     <div class="field"><label for="ex-desc">What for (optional)</label><input class="input" id="ex-desc" data-nofocus="1"></div></div>
     <div class="row"><button class="btn primary" id="ex-save">Save expense</button><button class="btn ghost" data-act="closeModal">Cancel</button></div>`, box=>{
     chipsPick(box,"cat");
+    box.querySelectorAll('[data-pick="cat"]').forEach(b=>b.addEventListener("click",()=>{ box.querySelector("#ex-subwrap").hidden = picked(box,"cat")!=="Sub labor"; }));
     let photo=null;
     wirePhotoPicker(box, "ex", b=>{ photo=b; box.querySelector("#ex-amt").focus(); });
     box.querySelector("#ex-save").addEventListener("click", async ()=>{
       const amt=n(box.querySelector("#ex-amt").value);
       if(!amt){ box.querySelector("#ex-amt").focus(); toast("Type the amount"); return; }
       const btn=box.querySelector("#ex-save"); btn.disabled=true; btn.textContent="Saving…";
-      const item={id:rid(), amount:amt, category:picked(box,"cat"), date:dateVal(box.querySelector("#ex-date").value), desc:box.querySelector("#ex-desc").value.trim(), assetId:null, drive:null};
+      const item={id:rid(), amount:amt, category:picked(box,"cat"), date:dateVal(box.querySelector("#ex-date").value), desc:box.querySelector("#ex-desc").value.trim(), assetId:null, drive:null, subContactId: picked(box,"cat")==="Sub labor" ? (box.querySelector("#ex-sub").value||null) : null};
       const jobId=j.id;
       if(photo){
         try{ item.assetId = await storeAsset(photo, "image/jpeg", jobId); }
@@ -1546,7 +1613,7 @@ function editPartner(id){
 const ACT = {
   trade:b=>{ S.trade=b.dataset.v; try{localStorage.setItem("rh-trade",S.trade);}catch(e){} render(); },
   view:b=>{ S.view=b.dataset.v; S.openJob=null; render(); window.scrollTo(0,0); },
-  open:b=>{ S.openJob=b.dataset.id; S.jobTab="info"; render(); },
+  open:b=>{ if($("#modal").innerHTML) closeModal(); S.openJob=b.dataset.id; S.jobTab="info"; render(); },
   close:()=>{ S.openJob=null; render(); },
   jtab:b=>{ S.jobTab=b.dataset.v; render(); const sh=$("#sheet .sheet"); if(sh) sh.scrollTop=0; },
   period:b=>{ S.period=b.dataset.v; render(); },
@@ -1567,11 +1634,12 @@ const ACT = {
     mutateJob(id, x=>{ const d=(x.docs||[]).find(y=>y.id===did); if(d) d.total=v; x.contract=v; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"system",text:`Contract price set to ${money(v,1)} from estimate ${d?d.name:""}`}); });
     toast("Contract price set to "+money(v,1)); },
   editContact:b=>editContact(b.dataset.kind, b.dataset.id),
+  subProfile:b=>subProfile(b.dataset.id),
   subToExpense:b=>{ const id=S.openJob, sid=b.dataset.item, j=S.jobs[id]; const a=(j.subs||[]).find(y=>y.id===sid); if(!a) return;
     const pin=document.getElementById("sb-price-"+sid); if(pin && pin.value!=="" && n(pin.value)!==n(a.price)) a.price=n(pin.value);
     if(!n(a.price)){ toast("Enter the agreed price first"); pin&&pin.focus(); return; }
     const c=contactById("subs",a.contactId), eid=rid();
-    mutateJob(id, x=>{ x.expenses=x.expenses||[]; x.expenses.push({id:eid, amount:n(a.price), category:"Sub labor", date:Date.now(), desc:[c&&c.name, a.scope].filter(Boolean).join(" · "), assetId:null, drive:null});
+    mutateJob(id, x=>{ x.expenses=x.expenses||[]; x.expenses.push({id:eid, amount:n(a.price), category:"Sub labor", date:Date.now(), desc:[c&&c.name, a.scope].filter(Boolean).join(" · "), assetId:null, drive:null, subContactId:a.contactId});
       const s2=(x.subs||[]).find(y=>y.id===sid); if(s2){ s2.expenseId=eid; s2.price=n(a.price); } });
     toast("Added to expenses"); },
   toggleSigned:()=>{ const id=S.openJob, j=S.jobs[id]; if(!j) return; const on=!j.signedAt;
@@ -1660,6 +1728,7 @@ document.addEventListener("change", e=>{
   if(el.dataset.esttotal && S.openJob){ const did=el.dataset.esttotal, v=el.value===""?null:n(el.value); mutateJob(S.openJob, x=>{ const d=(x.docs||[]).find(y=>y.id===did); if(d) d.total=v; }); return; }
   if(el.id==="srcYear"){ S.srcYear=Number(el.value); render(); return; }
   if(el.id==="srcFilter"){ S.srcFilter=el.value; render(); return; }
+  if(el.id==="th1099"){ saveSettings({threshold1099:n(el.value)||2000}); toast("Threshold saved"); return; }
   if(el.dataset.contact && S.openJob){
     const kind=el.dataset.contact, field=el.dataset.cfield, id=S.openJob;
     const apply = cid => {
@@ -1711,6 +1780,7 @@ document.addEventListener("dragover", e=>{
 document.addEventListener("dragleave", e=>{ const z=e.target.closest?.("#docDrop,#estDrop"); if(z && !z.contains(e.relatedTarget)) z.classList.remove("over"); });
 document.addEventListener("drop", async e=>{
   if(!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+  if(e.target.closest && e.target.closest("#modal")){ e.preventDefault(); return; }
   e.preventDefault(); document.querySelectorAll(".dropzone.over").forEach(x=>x.classList.remove("over"));
   if(!S.openJob || S.mode!=="owner"){ return; }
   const est = !!e.target.closest?.("#estDrop");
