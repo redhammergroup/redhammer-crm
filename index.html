@@ -272,6 +272,7 @@ const STAGES = {
 const CLOSED = {roofing:"Complete", granite:"Paid", other:"Paid"};
 const TRADES = [["roofing","Roofing"],["granite","Granite"],["other","Other"]];
 const SOURCES = ["Cold Call","Door Knock","Door Sign","Yard Sign","Referral","Tony","Angi","Google","Google Ad","Website","Craigslist","Other"];
+const sourceList = () => [...SOURCES.slice(0,-1), ...S.settings.partners.map(p=>p.name).filter(nm=>nm && !SOURCES.some(x=>x.toLowerCase()===String(nm).toLowerCase())), "Other"];
 const srcLabel = j => j.source==="Other" ? (String(j.sourceOther||"").trim() || "Other") : (j.source || "Not set");
 const EXP_CATS = ["Materials","Sub labor","Labor","Permits","Dump fees","Equipment","Other"];
 const PAY_METHODS = ["Check","Card","Cash","Insurance check","Other"];
@@ -293,7 +294,7 @@ const DEFAULT_SETTINGS = {partners:[], receiptNo:0};
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Sep 29 · sharper camera 2";
+const APP_VERSION = "Sep 29 · Tony split";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -320,14 +321,23 @@ const daysSince = j => Math.floor((Date.now() - (j.lastContact || j.createdAt ||
 const digits = p => String(p||"").replace(/[^\d+]/g,"");
 const tradeName = t => (TRADES.find(x=>x[0]===t)||[])[1] || t;
 
+/* a job has a profit split only when its lead source is a partner (e.g. Tony) */
+const TONY_DEFAULT = {id:"tony", name:"Tony", pct:50, basis:"profit"};
+function partnerFor(j){
+  const src = String(srcLabel(j)).trim().toLowerCase();
+  const p = S.settings.partners.find(x=>String(x.name).trim().toLowerCase()===src);
+  if(p) return p;
+  if(src==="tony") return S.settings.partners.find(x=>x.id==="tony") || TONY_DEFAULT;
+  return null;
+}
 function calc(j){
   const contract = n(j.contract);
   const expenses = (j.expenses||[]).reduce((a,e)=>a+n(e.amount),0);
   const paid = (j.payments||[]).reduce((a,p)=>a+n(p.amount),0);
   const profit = contract - expenses;
   let cut = 0, pct = 0, basis = "profit", partner = null;
-  if(j.partnerId){
-    partner = S.settings.partners.find(p=>p.id===j.partnerId) || null;
+  partner = partnerFor(j);
+  if(partner){
     pct = j.splitPct!=null && j.splitPct!=="" ? n(j.splitPct) : n(partner?.pct);
     basis = j.splitBasis || partner?.basis || "profit";
     cut = (basis==="contract" ? contract : Math.max(profit,0)) * pct/100;
@@ -342,7 +352,7 @@ function toast(msg){
 }
 
 /* ---------- persistence (Supabase) ---------- */
-const row = j => ({id:j.id, trade:j.trade, stage:j.stage, lost:!!j.lost, partner_id:j.partnerId||null, data:j, updated_at:new Date().toISOString()});
+const row = j => ({id:j.id, trade:j.trade, stage:j.stage, lost:!!j.lost, partner_id:(partnerFor(j)||{}).id||null, data:j, updated_at:new Date().toISOString()});
 const chains = {};
 function mutateJob(id, fn){
   chains[id] = (chains[id]||Promise.resolve()).then(async () => {
@@ -641,7 +651,7 @@ function renderLogin(){
 /* ----- board ----- */
 function cardHTML(j){
   const c = calc(j), lvl = ageLevel(j), attn = needsAttn(j);
-  const partner = j.partnerId ? S.settings.partners.find(p=>p.id===j.partnerId) : null;
+  const partner = partnerFor(j);
   return `<button class="card ${lvl?"attn"+lvl:""}" draggable="true" data-act="open" data-id="${esc(j.id)}">
     ${attn?`<span class="meta"><span class="pill attn">Needs attention</span></span>`:""}
     <span class="nm">${esc(j.name||"No name")}</span>
@@ -790,7 +800,7 @@ function profitView(){
   const maxT = Math.max(1, ...byTrade.map(t=>Math.abs(t.v)));
   const pipe = open.reduce((a,j)=>{ const c=calc(j); a.contract+=c.contract; a.net+=c.net; return a; },{contract:0,net:0});
   const owed = all.filter(j=>!j.lost).reduce((a,j)=>{ const c=calc(j); return a + (c.contract && c.balance>0 && c.paid>0 || isClosed(j) && c.balance>0 ? c.balance : 0); },0);
-  const partners = S.settings.partners.map(p=>({p, v: closed.filter(j=>j.partnerId===p.id).reduce((a,j)=>a+calc(j).cut,0)})).filter(x=>x.v);
+  const partners = (S.settings.partners.some(p=>p.id==="tony"||/^tony$/i.test(p.name))?S.settings.partners:[...S.settings.partners,TONY_DEFAULT]).map(p=>({p, v: closed.filter(j=>(partnerFor(j)||{}).id===p.id).reduce((a,j)=>a+calc(j).cut,0)})).filter(x=>x.v);
   const pl = {month:"This month", lastmonth:"Last month", year:"This year", lastyear:"Last year", all:"All time"};
   return `<div class="stack">
     <div class="chips" role="group" aria-label="Period">${Object.entries(pl).map(([k,l])=>`<button class="chip" data-act="period" data-v="${k}" aria-pressed="${S.period===k}">${l}</button>`).join("")}</div>
@@ -818,8 +828,9 @@ function settingsView(){
   const ps = S.settings.partners;
   return `<div class="stack">
     <div class="panel stack"><h3 class="sec">Lead partners</h3>
-      <p class="small muted" style="margin:0">Set each partner's split and whether it comes off profit or the contract price. You can override it on any single job.</p>
-      ${ps.length?`<div class="list">${ps.map(p=>`<div class="li"><div class="grow"><div class="t">${esc(p.name)}</div><div class="s">${n(p.pct)}% of ${p.basis==="contract"?"contract price":"profit"}</div></div><button class="btn small" data-act="editPartner" data-id="${esc(p.id)}">Edit</button></div>`).join("")}</div>`:""}
+      <p class="small muted" style="margin:0">A split only applies to jobs whose <b>lead source</b> is that partner. Set the percentage and whether it comes off profit or the contract price. You can override it on any single job. Only you see this.</p>
+      ${(()=>{ const list = ps.some(p=>p.id==="tony"||/^tony$/i.test(p.name)) ? ps : [TONY_DEFAULT, ...ps];
+        return `<div class="list">${list.map(p=>`<div class="li"><div class="grow"><div class="t">${esc(p.name)}</div><div class="s">${n(p.pct)}% of ${p.basis==="contract"?"contract price":"profit"}</div></div><button class="btn small" data-act="editPartner" data-id="${esc(p.id)}">Edit</button></div>`).join("")}</div>`; })()}
       <button class="btn" data-act="editPartner">+ Add partner</button>
     </div>
     <p class="small muted" style="margin:0">App version ${APP_VERSION}</p>
@@ -849,7 +860,7 @@ function renderSheet(){
     <div class="sheethead">
       <div class="rowtop"><button class="back" data-act="close" aria-label="Back to board">‹ Back</button><div class="jn">${esc(j.name||"No name")}</div><div class="tr">${esc(tradeName(j.trade))}${j.lost?" · Lost":""}</div></div>
       <div class="hero">
-        <div class="big"><span class="v num ${c.net<0?"neg":""}">${money(c.net)}</span><span class="k">${j.partnerId?"your profit":"profit"}</span></div>
+        <div class="big"><span class="v num ${c.net<0?"neg":""}">${money(c.net)}</span><span class="k">${c.partner?"your profit":"profit"}</span></div>
         <div class="kv num"><div><span>Contract</span><b>${money(c.contract)}</b></div><div><span>Expenses</span><b>${money(c.expenses)}</b></div><div><span>Balance due</span><b>${money(c.balance)}</b></div></div>
       </div>
       <div class="jtabs" role="group" aria-label="Job sections">${tabs.map(([k,l])=>`<button data-act="jtab" data-v="${k}" aria-pressed="${S.jobTab===k}">${l}</button>`).join("")}</div>
@@ -894,9 +905,8 @@ function jobInfo(j){
     </div>
     <div class="field"><label for="f-address">Address</label><input class="input" id="f-address" data-field="address" value="${esc(j.address)}"></div>
     <div class="grid2">
-      <div class="field"><label for="f-source">Lead source</label>${sel("source",[["","Pick one"],...SOURCES,...(j.source&&!SOURCES.includes(j.source)?[j.source]:[])],j.source)}
+      <div class="field"><label for="f-source">Lead source</label>${sel("source",[["","Pick one"],...sourceList(),...(j.source&&!sourceList().includes(j.source)?[j.source]:[])],j.source)}
         ${j.source==="Other"?`<input class="input" id="f-sourceOther" data-field="sourceOther" placeholder="Type the source" value="${esc(j.sourceOther)}" style="margin-top:6px">`:""}</div>
-      <div class="field"><label for="f-partnerId">Lead partner</label>${sel("partnerId",[["","None"],...ps.map(p=>[p.id,p.name])],j.partnerId)}</div>
     </div>
     ${j.trade==="roofing"?`<div class="grid2">
       <div class="field"><label for="f-carrier">Insurance carrier</label><input class="input" id="f-carrier" data-field="carrier" value="${esc(j.carrier)}"></div>
@@ -931,11 +941,11 @@ function jobMoney(j,c){
       <div class="li"><div class="grow">Contract</div><b>${money(c.contract,1)}</b></div>
       <div class="li"><div class="grow">Expenses</div><b>- ${money(c.expenses,1)}</b></div>
       <div class="li"><div class="grow">Profit</div><b>${money(c.profit,1)}</b></div>
-      ${j.partnerId?`<div class="li"><div class="grow">${esc(p?p.name:"Partner")} share <span class="muted small">${c.pct}% of ${c.basis==="contract"?"contract":"profit"}</span></div><b>- ${money(c.cut,1)}</b></div>
+      ${c.partner?`<div class="li"><div class="grow">${esc(p?p.name:"Partner")} share <span class="muted small">${c.pct}% of ${c.basis==="contract"?"contract":"profit"}</span></div><b>- ${money(c.cut,1)}</b></div>
       <div class="li"><div class="grow"><b>You keep</b></div><b>${money(c.net,1)}</b></div>`:""}
     </div>
   </div>
-  ${j.partnerId?`<div class="panel stack"><h3 class="sec">Split for this job</h3>
+  ${c.partner?`<div class="panel stack"><h3 class="sec">Split for this job</h3>
     <p class="small muted" style="margin:0">Leave blank to use ${esc(p?p.name:"the partner")}'s default (${n(p?.pct)}% of ${p?.basis==="contract"?"contract":"profit"}).</p>
     <div class="grid2">
       <div class="field"><label for="f-splitPct">Split %</label><input class="input num" id="f-splitPct" data-field="splitPct" type="number" inputmode="decimal" min="0" max="100" step="0.5" value="${j.splitPct??""}" placeholder="Default"></div>
@@ -1020,9 +1030,8 @@ function quickAdd(){
       <div class="field"><label for="qa-phone">Phone</label><input class="input" id="qa-phone" type="tel" inputmode="tel"></div>
       <div class="field"><label for="qa-address">Address</label><input class="input" id="qa-address"></div>
       <div class="grid2">
-        <div class="field"><label for="qa-source">Lead source</label><select class="input" id="qa-source"><option value="">Pick one</option>${SOURCES.map(s=>`<option>${esc(s)}</option>`).join("")}</select>
+        <div class="field"><label for="qa-source">Lead source</label><select class="input" id="qa-source"><option value="">Pick one</option>${sourceList().map(s=>`<option>${esc(s)}</option>`).join("")}</select>
           <input class="input" id="qa-other" placeholder="Type the source" hidden style="margin-top:6px"></div>
-        ${ps.length?`<div class="field"><label for="qa-partner">Lead partner</label><select class="input" id="qa-partner"><option value="">None</option>${ps.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select></div>`:""}
       </div>
       <div class="field"><label for="qa-note">Note (optional)</label><textarea class="input" id="qa-note" style="min-height:60px"></textarea></div>
       <div class="row"><button class="btn primary" type="submit">Add to Lead</button><button class="btn ghost" type="button" data-act="closeModal">Cancel</button></div>
@@ -1031,7 +1040,7 @@ function quickAdd(){
     box.querySelector("#qa").addEventListener("submit", e=>{
       e.preventDefault();
       const name=box.querySelector("#qa-name").value.trim(); if(!name) return;
-      const partnerId = box.querySelector("#qa-partner")?.value || "";
+      const partnerId = "";
       const now=Date.now(), note=box.querySelector("#qa-note").value.trim();
       const j={id:rid(), trade:S.trade, stage:"Lead", name, phone:box.querySelector("#qa-phone").value.trim(), email:"",
         address:box.querySelector("#qa-address").value.trim(), source: box.querySelector("#qa-source").value, sourceOther: box.querySelector("#qa-source").value==="Other" ? box.querySelector("#qa-other").value.trim() : "",
@@ -1242,7 +1251,7 @@ function confirmBox(title, body, label, onYes){
   });
 }
 function editPartner(id){
-  const p = S.settings.partners.find(x=>x.id===id) || {id:"", name:"", pct:50, basis:"profit"};
+  const p = S.settings.partners.find(x=>x.id===id) || (id==="tony" ? {...TONY_DEFAULT} : {id:"", name:"", pct:50, basis:"profit"});
   openModal(`<h2>${p.id?"Edit partner":"Add partner"}</h2>
     <div class="field"><label for="pt-name">Name</label><input class="input" id="pt-name" value="${esc(p.name)}"></div>
     <div class="field"><label for="pt-pct">Default split %</label><input class="input num" id="pt-pct" type="number" inputmode="decimal" min="0" max="100" step="0.5" value="${n(p.pct)}"></div>
