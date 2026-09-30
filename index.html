@@ -140,6 +140,8 @@ main{padding:14px 16px calc(90px + env(safe-area-inset-bottom,0px))}
 .thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .pill.signed{background:var(--good);color:#fff;font-weight:700;letter-spacing:.02em}
 .card.signedc{box-shadow:inset 4px 0 0 var(--good),var(--shadow);border-color:var(--good)}
+.dropzone{border:2px dashed var(--line);border-radius:var(--r);padding:22px 14px;display:grid;justify-items:center;gap:4px;text-align:center;background:var(--sunk)}
+.dropzone.over{border-color:var(--red);background:var(--red-tint)}
 .legend{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px}
 .card .amt{margin-left:auto;font-weight:600;font-size:14px}
 .card.stale{box-shadow:inset 3px 0 0 var(--warn),var(--shadow)}
@@ -298,7 +300,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Sep 30 · email + maps";
+const APP_VERSION = "Sep 30 · estimates upload";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -337,6 +339,49 @@ function partnerTotals(jobs){
     if(j.lost) t.dead++;
     else if(isOpen(j)){ if(j.stage==="Appointment") t.appts++; else if(j.signedAt) t.signed++; else t.opened++; } });
   t.owed=Math.max(0, t.earned-t.paid); return t;
+}
+/* saved contacts: enter once, pick from a dropdown on any job */
+const CONTACT_KINDS = {
+  supplementers:{one:"supplementer", title:"Supplementer", fields:[["name","Name"],["company","Company"],["phone","Phone"],["email","Email"],["notes","Notes (fee %, turnaround…)"]]},
+  subs:{one:"sub", title:"Sub", fields:[["name","Name"],["company","Company / crew"],["trade","Trade (roofing crew, gutters, paint…)"],["phone","Phone"],["email","Email"],["notes","Notes (rates, insurance on file…)"]]}
+};
+const contacts = kind => ((S.settings.contacts||{})[kind]||[]).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+const contactById = (kind,id) => ((S.settings.contacts||{})[kind]||[]).find(c=>c.id===id);
+function saveContact(kind, c){
+  const all={...(S.settings.contacts||{})}; const list=(all[kind]||[]).filter(x=>x.id!==c.id); list.push(c); all[kind]=list;
+  return saveSettings({contacts:all});
+}
+function contactSelect(kind, field, val, label){
+  const K=CONTACT_KINDS[kind];
+  return `<select class="input" id="f-${field}" data-contact="${kind}" data-cfield="${field}" aria-label="${esc(label||K.title)}">
+    <option value="">${esc(label||"Pick "+K.one)}</option>${contacts(kind).map(c=>`<option value="${esc(c.id)}" ${c.id===val?"selected":""}>${esc(c.name)}${c.company?" · "+esc(c.company):""}</option>`).join("")}
+    <option value="__new">+ Add new ${K.one}…</option></select>`;
+}
+function contactCard(kind, c, extra=""){
+  if(!c) return "";
+  return `<div class="cline" style="gap:6px"><div class="grow" style="flex:1;min-width:150px"><div class="t">${esc(c.name)}</div><div class="s small muted">${[c.company,c.trade,c.phone,c.email].filter(Boolean).map(esc).join(" · ")}</div>${c.notes?`<div class="s small muted">${esc(c.notes)}</div>`:""}</div>
+    ${c.phone?`<a class="btn small primary" href="tel:${esc(digits(c.phone))}">Call</a><a class="btn small" href="sms:${esc(digits(c.phone))}">Text</a>`:""}
+    ${c.email?`<a class="btn small" href="mailto:${esc(c.email)}">Email</a>`:""}
+    <button class="btn small ghost" data-act="editContact" data-kind="${kind}" data-id="${esc(c.id)}">Edit</button>${extra}</div>`;
+}
+function editContact(kind, id, onSaved){
+  const K=CONTACT_KINDS[kind], c=contactById(kind,id)||{id:"", name:""};
+  openModal(`<h2>${c.id?"Edit":"New"} ${esc(K.one)}</h2>
+    ${K.fields.map(([k,l])=>`<div class="field"><label for="ct-${k}">${esc(l)}</label>${k==="notes"?`<textarea class="input" id="ct-${k}" style="min-height:60px">${esc(c[k]||"")}</textarea>`:`<input class="input" id="ct-${k}" ${k==="phone"?'type="tel" inputmode="tel"':k==="email"?'type="email" inputmode="email"':""} value="${esc(c[k]||"")}">`}</div>`).join("")}
+    <p class="small muted" style="margin:0">Saved to your contacts, so you can pick them on any job.</p>
+    <div class="row"><button class="btn primary" id="ct-save">Save</button><button class="btn ghost" data-act="closeModal">Cancel</button>
+    ${c.id?`<button class="btn ghost danger" id="ct-del" style="margin-left:auto">Delete</button>`:""}</div>`, box=>{
+    box.querySelector("#ct-save").addEventListener("click", ()=>{
+      const nc={id:c.id||rid()}; K.fields.forEach(([k])=>nc[k]=box.querySelector("#ct-"+k).value.trim());
+      if(!nc.name){ toast("Add a name"); box.querySelector("#ct-name").focus(); return; }
+      saveContact(kind, nc); closeModal(); toast(K.title+" saved"); if(onSaved) onSaved(nc);
+    });
+    box.querySelector("#ct-del")?.addEventListener("click", ()=>{
+      confirmBox("Delete "+(c.name||K.one)+"?", "They'll be removed from your contacts. Jobs that used them will show no "+K.one+".", "Delete", ()=>{
+        const all={...(S.settings.contacts||{})}; all[kind]=(all[kind]||[]).filter(x=>x.id!==c.id); saveSettings({contacts:all}); toast("Deleted");
+      });
+    });
+  });
 }
 const TONY_DEFAULT = {id:"tony", name:"Tony", pct:15, basis:"profit"};
 function partnerFor(j){
@@ -973,6 +1018,12 @@ function settingsView(){
         return `<div class="list">${list.map(p=>`<div class="li"><div class="grow"><div class="t">${esc(p.name)}</div><div class="s">${n(p.pct)}% of ${p.basis==="contract"?"contract price":"profit"}</div></div><button class="btn small" data-act="editPartner" data-id="${esc(p.id)}">Edit</button></div>`).join("")}</div>`; })()}
       <button class="btn" data-act="editPartner">+ Add partner</button>
     </div>
+    <div class="panel stack"><h3 class="sec">Contacts</h3>
+      <p class="small muted" style="margin:0">Supplementers and subs you've saved. They show up as dropdowns on every job.</p>
+      ${Object.entries(CONTACT_KINDS).map(([kind,K])=>`<div><div class="label" style="margin:6px 0 2px">${K.title}s · ${contacts(kind).length}</div>
+        ${contacts(kind).length?`<div class="list">${contacts(kind).map(c=>`<div class="li"><div class="grow"><div class="t">${esc(c.name)}</div><div class="s">${[c.company,c.trade,c.phone].filter(Boolean).map(esc).join(" · ")}</div></div><button class="btn small" data-act="editContact" data-kind="${kind}" data-id="${esc(c.id)}">Edit</button></div>`).join("")}</div>`:""}
+        <button class="btn small" data-act="editContact" data-kind="${kind}" data-id="">+ Add ${K.one}</button></div>`).join("")}
+    </div>
     <div class="panel stack"><h3 class="sec">Alarms on your phone</h3>
       <p class="small muted" style="margin:0">Get an alarm 1 hour before every appointment, and an alert when Tony submits a lead. One-time setup:</p>
       <ol class="small" style="margin:0;padding-left:20px;display:grid;gap:4px">
@@ -1005,7 +1056,7 @@ function renderSheet(){
   if(!j){ el.innerHTML=""; if(S.openJob && S.ready){ S.openJob=null; } return; }
   const c = calc(j);
   const scrollY = el.firstElementChild ? el.firstElementChild.scrollTop : 0;
-  const tabs=[["info","Info"],["money","Money"],["notes","Notes"],["files","Files"]];
+  const tabs=[["info","Info"],["money","Money"],["notes","Notes"],["files","Files"],["subs","Subs"]];
   el.innerHTML = `<div class="sheet" role="dialog" aria-label="${esc(j.name)}">
     <div class="sheethead">
       <div class="rowtop"><button class="back" data-act="close" aria-label="Back to board">‹ Back</button><div class="jn">${esc(j.name||"No name")}</div><div class="tr">${esc(tradeName(j.trade))}${j.lost?" · Lost":""}</div></div>
@@ -1015,7 +1066,7 @@ function renderSheet(){
       </div>
       <div class="jtabs" role="group" aria-label="Job sections">${tabs.map(([k,l])=>`<button data-act="jtab" data-v="${k}" aria-pressed="${S.jobTab===k}">${l}</button>`).join("")}</div>
     </div>
-    <div class="sheetbody">${S.jobTab==="info"?jobInfo(j):S.jobTab==="money"?jobMoney(j,c):S.jobTab==="notes"?jobNotes(j):jobFiles(j)}</div>
+    <div class="sheetbody">${S.jobTab==="info"?jobInfo(j):S.jobTab==="money"?jobMoney(j,c):S.jobTab==="notes"?jobNotes(j):S.jobTab==="subs"?jobSubs(j):jobFiles(j)}</div>
   </div>`;
   el.firstElementChild.scrollTop = scrollY;
 }
@@ -1072,9 +1123,33 @@ function jobInfo(j){
     </div>`:""}
     <div class="field"><label for="f-trade">Board</label>${sel("trade",TRADES,j.trade)}</div>
   </div>
+  ${j.trade==="roofing"?`<div class="panel stack"><h3 class="sec">Claim contacts</h3>
+    <div class="label">Adjuster</div>
+    <div class="grid2">
+      <div class="field"><label for="f-adjName">Name</label><input class="input" id="f-adjName" data-field="adjName" value="${esc(j.adjName||"")}"></div>
+      <div class="field"><label for="f-adjPhone">Phone</label><input class="input" id="f-adjPhone" data-field="adjPhone" type="tel" inputmode="tel" value="${esc(j.adjPhone||"")}"></div>
+      <div class="field"><label for="f-adjEmail">Email</label><input class="input" id="f-adjEmail" data-field="adjEmail" type="email" inputmode="email" value="${esc(j.adjEmail||"")}"></div>
+      <div class="field"><label for="f-adjMeet">Meeting date</label><input class="input" id="f-adjMeet" data-field="adjMeet" type="date" value="${esc(j.adjMeet||"")}"></div>
+    </div>
+    <div class="field"><label for="f-adjNotes">Adjuster notes</label><input class="input" id="f-adjNotes" data-field="adjNotes" value="${esc(j.adjNotes||"")}" placeholder="Field or desk adjuster, file #, what they said…"></div>
+    ${j.adjPhone||j.adjEmail?`<div class="row" style="gap:6px">${j.adjPhone?`<a class="btn small primary" href="tel:${esc(digits(j.adjPhone))}">Call adjuster</a><a class="btn small" href="sms:${esc(digits(j.adjPhone))}">Text</a>`:""}${j.adjEmail?`<a class="btn small" href="mailto:${esc(j.adjEmail)}">Email adjuster</a>`:""}</div>`:""}
+    <div class="label" style="margin-top:6px">Supplementer</div>
+    <div class="field"><label for="f-supplementerId" class="sr">Supplementer</label>${contactSelect("supplementers","supplementerId",j.supplementerId,"No supplementer yet")}</div>
+    ${contactCard("supplementers", contactById("supplementers", j.supplementerId))}
+  </div>`:""}
   <div class="panel stack"><h3 class="sec">Estimate</h3>
-    <button class="btn" disabled>Create estimate</button>
-    <p class="small muted" style="margin:0">Coming in phase 2: the estimator opens here with this customer filled in, and the finished estimate saves to Files.</p>
+    ${(()=>{ const ests=(j.docs||[]).filter(d=>d.category==="Estimate").sort((a,b)=>b.t-a.t);
+      return ests.length?`<div class="list">${ests.map(d=>`<div class="li" style="flex-wrap:wrap">
+        <div class="thumb">${d.type==="application/pdf"?"PDF":"IMG"}</div>
+        <div class="grow"><div class="t">${esc(d.name)}</div><div class="s">${fdate(d.t)}</div></div>
+        ${d.assetId?`<a class="btn small" href="${urlFor(d.assetId)||"#"}" target="_blank" rel="noopener">Open</a>`:""}
+        <div class="row" style="width:100%;gap:6px"><label class="sr" for="et-${esc(d.id)}">Estimate total</label><input class="input num" id="et-${esc(d.id)}" data-esttotal="${esc(d.id)}" type="number" inputmode="decimal" step="0.01" placeholder="Estimate total" value="${d.total??""}" style="flex:1;min-width:130px">
+          <button class="btn small" data-act="estToContract" data-item="${esc(d.id)}">Use as contract price</button></div></div>`).join("")}</div>`:""; })()}
+    <div class="dropzone" id="estDrop">
+      <b>Drop an estimate here</b><span class="small muted">Xactimate or any estimate PDF</span>
+      <span class="btn filebtn" style="margin-top:6px">+ Upload estimate<input id="estInput" type="file" accept="application/pdf,image/*" multiple aria-label="Upload estimate"></span>
+    </div>
+    <button class="btn" disabled>Create estimate in the CRM (coming soon)</button>
   </div>
   <div class="row">
     ${j.lost?"":`<button class="btn" data-act="markLost">Mark as lost</button>`}
@@ -1152,15 +1227,33 @@ function jobNotes(j){
     ${S.isOwner?`<button class="btn small ghost danger" data-act="delItem" data-list="notes" data-item="${esc(x.id)}" aria-label="Delete note">✕</button>`:""}
   </div>`).join("")}</div>`:`<p class="muted small" style="margin:0">No notes yet.</p>`}</div>`;
 }
+function jobSubs(j){
+  const list=j.subs||[];
+  return `<div class="panel stack"><h3 class="sec">Subs on this job</h3>
+    <div class="field"><label for="f-addSub">Add a sub</label>${contactSelect("subs","addSub","","Pick a sub to add")}</div>
+    ${list.length?`<div class="list">${list.map(a=>{ const c=contactById("subs",a.contactId); return `<div class="li" style="display:block">
+      ${c?contactCard("subs", c, S.isOwner?`<button class="btn small ghost danger" data-act="delItem" data-list="subs" data-item="${esc(a.id)}" aria-label="Remove sub from job">✕</button>`:""):`<div class="s muted">Sub was deleted from contacts</div>`}
+      <div class="grid2" style="margin-top:8px">
+        <div class="field"><label for="sb-scope-${esc(a.id)}">Scope of work</label><input class="input" id="sb-scope-${esc(a.id)}" data-sub="${esc(a.id)}" data-sk="scope" value="${esc(a.scope||"")}" placeholder="e.g. tear-off & install"></div>
+        <div class="field"><label for="sb-price-${esc(a.id)}">Agreed price</label><input class="input num" id="sb-price-${esc(a.id)}" data-sub="${esc(a.id)}" data-sk="price" type="number" inputmode="decimal" step="0.01" value="${a.price??""}" placeholder="0.00"></div>
+        <div class="field"><label for="sb-date-${esc(a.id)}">Scheduled</label><input class="input" id="sb-date-${esc(a.id)}" data-sub="${esc(a.id)}" data-sk="date" type="date" value="${esc(a.date||"")}"></div>
+        <div class="field"><span class="label" style="font-size:12px">Paid</span>${a.expenseId?`<span class="pill fresh" style="align-self:start">✓ Logged as expense</span>`:`<button class="btn small" data-act="subToExpense" data-item="${esc(a.id)}">Log payment as expense</button>`}</div>
+      </div></div>`; }).join("")}</div>`:`<p class="small muted" style="margin:0">No subs on this job yet. Pick one above, or add a new sub. They'll be saved for next time.</p>`}
+  </div>
+  <p class="small muted" style="margin:0">The agreed price is for your records. It only counts against profit when you log the payment as an expense.</p>`;
+}
 function jobFiles(j){
   const docs=[...(j.docs||[])].sort((a,b)=>b.t-a.t);
   return `<div class="panel stack">
     <h3 class="sec">Documents</h3>
     <p class="small muted" style="margin:0">Contracts, insurance scopes, photos. Photos and PDFs work best.</p>
-    <span class="btn primary block filebtn">+ Upload document<input id="docInput" type="file" accept="image/*,application/pdf" aria-label="Upload document"></span>
+    <div class="dropzone" id="docDrop">
+      <b>Drop files here</b><span class="small muted">PDFs and photos, one or many</span>
+      <span class="btn primary filebtn" style="margin-top:6px">+ Choose files<input id="docInput" type="file" accept="image/*,application/pdf" multiple aria-label="Upload documents"></span>
+    </div>
     ${docs.length?`<div class="list">${docs.map(d=>`<div class="li">
       ${d.assetId && d.type!=="application/pdf"?`<img class="thumb" src="${urlFor(d.assetId)||PIXEL}" alt="">`:`<div class="thumb">${d.type==="application/pdf"?"PDF":"FILE"}</div>`}
-      <div class="grow"><div class="t">${esc(d.name)}</div><div class="s">${fdate(d.t)}</div>
+      <div class="grow"><div class="t">${esc(d.name)}${d.category?` <span class="tag">${esc(d.category)}</span>`:""}</div><div class="s">${fdate(d.t)}</div>
       <div class="row" style="margin-top:6px;gap:6px">${d.assetId?`<a class="btn small" href="${urlFor(d.assetId)||"#"}" target="_blank" rel="noopener">Open</a>`:""}${driveTag({...d,_list:"docs"})}</div></div>
       ${S.isOwner?`<button class="btn small ghost danger" data-act="delItem" data-list="docs" data-item="${esc(d.id)}" aria-label="Delete document">✕</button>`:""}
     </div>`).join("")}</div>`:""}
@@ -1469,6 +1562,18 @@ const ACT = {
     mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
   },
   setPath:b=>setPath(S.openJob, b.dataset.v),
+  estToContract:b=>{ const id=S.openJob, did=b.dataset.item, inp=document.getElementById("et-"+did); const v=inp?n(inp.value):0;
+    if(!v){ toast("Type the estimate total first"); inp&&inp.focus(); return; }
+    mutateJob(id, x=>{ const d=(x.docs||[]).find(y=>y.id===did); if(d) d.total=v; x.contract=v; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"system",text:`Contract price set to ${money(v,1)} from estimate ${d?d.name:""}`}); });
+    toast("Contract price set to "+money(v,1)); },
+  editContact:b=>editContact(b.dataset.kind, b.dataset.id),
+  subToExpense:b=>{ const id=S.openJob, sid=b.dataset.item, j=S.jobs[id]; const a=(j.subs||[]).find(y=>y.id===sid); if(!a) return;
+    const pin=document.getElementById("sb-price-"+sid); if(pin && pin.value!=="" && n(pin.value)!==n(a.price)) a.price=n(pin.value);
+    if(!n(a.price)){ toast("Enter the agreed price first"); pin&&pin.focus(); return; }
+    const c=contactById("subs",a.contactId), eid=rid();
+    mutateJob(id, x=>{ x.expenses=x.expenses||[]; x.expenses.push({id:eid, amount:n(a.price), category:"Sub labor", date:Date.now(), desc:[c&&c.name, a.scope].filter(Boolean).join(" · "), assetId:null, drive:null});
+      const s2=(x.subs||[]).find(y=>y.id===sid); if(s2){ s2.expenseId=eid; s2.price=n(a.price); } });
+    toast("Added to expenses"); },
   toggleSigned:()=>{ const id=S.openJob, j=S.jobs[id]; if(!j) return; const on=!j.signedAt;
     mutateJob(id, x=>{ x.signedAt = on ? Date.now() : null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:on?"Contingency signed":"Contingency signed mark removed"}); if(on){ x.lastContact=Date.now(); x.attnAck=Math.max(x.attnAck||0, ageLevel(x)); } });
     toast(on?"Marked signed":"Signed mark removed"); },
@@ -1514,7 +1619,7 @@ const ACT = {
   },
   delItem:b=>{
     const id=S.openJob, list=b.dataset.list, item=b.dataset.item;
-    const labels={expenses:"expense",payments:"payment",notes:"note",docs:"document",partnerPayouts:"payout"};
+    const labels={expenses:"expense",payments:"payment",notes:"note",docs:"document",partnerPayouts:"payout",subs:"sub from this job"};
     confirmBox("Delete "+labels[list]+"?", "This can't be undone. Any copy already in Google Drive stays there.", "Delete", async ()=>{
       const it=(S.jobs[id]?.[list]||[]).find(x=>x.id===item);
       await mutateJob(id, x=>{ x[list]=(x[list]||[]).filter(y=>y.id!==item); });
@@ -1551,8 +1656,23 @@ document.addEventListener("click", e=>{
 document.addEventListener("change", e=>{
   const el=e.target;
   if(el.id==="docInput"){ uploadDoc(el); return; }
+  if(el.id==="estInput"){ uploadDoc(el, "Estimate"); return; }
+  if(el.dataset.esttotal && S.openJob){ const did=el.dataset.esttotal, v=el.value===""?null:n(el.value); mutateJob(S.openJob, x=>{ const d=(x.docs||[]).find(y=>y.id===did); if(d) d.total=v; }); return; }
   if(el.id==="srcYear"){ S.srcYear=Number(el.value); render(); return; }
   if(el.id==="srcFilter"){ S.srcFilter=el.value; render(); return; }
+  if(el.dataset.contact && S.openJob){
+    const kind=el.dataset.contact, field=el.dataset.cfield, id=S.openJob;
+    const apply = cid => {
+      if(field==="addSub"){ if(!cid) return; mutateJob(id, x=>{ x.subs=x.subs||[]; x.subs.push({id:rid(), contactId:cid, scope:"", price:null, date:""}); }); return; }
+      mutateJob(id, x=>{ x[field]=cid||""; });
+    };
+    if(el.value==="__new"){ el.value=""; editContact(kind, "", nc=>apply(nc.id)); } else apply(el.value);
+    return;
+  }
+  if(el.dataset.sub && S.openJob){
+    const sid=el.dataset.sub, k=el.dataset.sk; let v=el.value; if(k==="price") v = v==="" ? null : n(v);
+    mutateJob(S.openJob, x=>{ const a=(x.subs||[]).find(y=>y.id===sid); if(a) a[k]=v; }); return;
+  }
   const f=el.dataset.field; if(!f || !S.openJob) return;
   let v=el.value;
   if(f==="contract") v = v==="" ? null : n(v);
@@ -1566,19 +1686,37 @@ document.addEventListener("change", e=>{
   });
   if(f==="trade"){ S.trade=v; toast("Moved to the "+tradeName(v)+" board"); }
 });
-async function uploadDoc(input){
-  const f=input.files[0]; if(!f) return;
-  const id=S.openJob;
+async function uploadDoc(input, category){
+  const files=[...(input.files||[])]; input.value="";
+  for(const f of files) await uploadOneDoc(f, category);
+}
+async function uploadOneDoc(f, category){
+  const id=S.openJob; if(!id || !f) return;
   let blob=f, type=f.type;
   if(type.startsWith("image/")){ blob=await compressImage(f); type=blob.type||"image/jpeg"; }
-  if(!ASSET_TYPES.includes(type)){ toast("Use a photo or PDF."); return; }
+  if(!ASSET_TYPES.includes(type)){ toast(`${f.name}: use a photo or PDF.`); return; }
   toast("Uploading…");
-  const item={id:rid(), name:f.name.replace(/\.[^.]+$/,"")+(type==="image/jpeg"&&!/\.jpe?g$/i.test(f.name)?".jpg":f.name.match(/\.[^.]+$/)?.[0]||""), type, t:Date.now(), assetId:null, drive:null};
+  const item={id:rid(), name:f.name.replace(/\.[^.]+$/,"")+(type==="image/jpeg"&&!/\.jpe?g$/i.test(f.name)?".jpg":f.name.match(/\.[^.]+$/)?.[0]||""), type, t:Date.now(), assetId:null, drive:null, category:category||""};
   try{ item.assetId = await storeAsset(blob, type, id); }catch(e){ toast(assetErr(e)); return; }
   await mutateJob(id, x=>{ x.docs=x.docs||[]; x.docs.push(item); });
-  toast("Document saved");
+  toast(`Saved ${item.name}`);
   fileToDrive(id, "docs", item.id, blob, item.name, type);
 }
+
+/* drag files onto the Files tab */
+document.addEventListener("dragover", e=>{
+  if(!e.dataTransfer || ![...e.dataTransfer.types].includes("Files")) return;
+  e.preventDefault(); const z=e.target.closest?.("#docDrop,#estDrop"); document.querySelectorAll(".dropzone.over").forEach(x=>x!==z&&x.classList.remove("over")); if(z) z.classList.add("over");
+});
+document.addEventListener("dragleave", e=>{ const z=e.target.closest?.("#docDrop,#estDrop"); if(z && !z.contains(e.relatedTarget)) z.classList.remove("over"); });
+document.addEventListener("drop", async e=>{
+  if(!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+  e.preventDefault(); document.querySelectorAll(".dropzone.over").forEach(x=>x.classList.remove("over"));
+  if(!S.openJob || S.mode!=="owner"){ return; }
+  const est = !!e.target.closest?.("#estDrop");
+  if(!est && S.jobTab!=="files" && S.jobTab!=="info"){ S.jobTab="files"; render(); }
+  for(const f of [...e.dataTransfer.files]) await uploadOneDoc(f, est?"Estimate":"");
+});
 
 /* lost search: update the list only, keep focus */
 document.addEventListener("input", e=>{
