@@ -304,7 +304,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Oct 1 · reminders + receipts";
+const APP_VERSION = "Oct 1 · employees";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -450,6 +450,14 @@ function editContact(kind, id, onSaved){
     });
   });
 }
+const PERMS = [
+  ["b_roofing","Roofing board"],["b_granite","Granite board"],["b_other","Other board"],
+  ["addLeads","Add new leads"],["edit","Edit jobs (stages, details, notes, mark lost)"],
+  ["money","See money (prices, expenses, profit, payments)"],["expenses","Add expenses & receipt photos"],
+  ["payments","Record customer payments & make receipts"],["files","View & upload documents"],
+  ["lost","See Lost Leads"],["profit","See Profit reports"],["delete","Delete leads forever"]];
+const PRESETS = {Crew:{b_roofing:1,expenses:1,files:1}, Office:{b_roofing:1,b_granite:1,b_other:1,addLeads:1,edit:1,money:1,expenses:1,payments:1,files:1,lost:1}, Everything:Object.fromEntries(PERMS.map(p=>[p[0],1]))};
+const myTrades = () => TRADES.filter(([k])=>can("b_"+k));
 const can = k => S.mode==="owner" || (S.mode==="employee" && !!(S.me && S.me.perms && S.me.perms[k]));
 const TONY_DEFAULT = {id:"tony", name:"Tony", pct:15, basis:"profit"};
 function partnerFor(j){
@@ -489,7 +497,8 @@ function mutateJob(id, fn){
     const cur = structuredClone(base);
     fn(cur); cur.updatedAt = Date.now();
     S.jobs[id] = cur; renderSoon();
-    const {error} = await sb.from("jobs").upsert(row(cur)); if(error) writeErr(error);
+    const {error} = S.mode==="owner" ? await sb.from("jobs").upsert(row(cur)) : await sb.from("jobs").update(row(cur)).eq("id", id);
+    if(error) writeErr(error);
   }).catch(e=>writeErr(e));
   return chains[id];
 }
@@ -728,7 +737,7 @@ function render(){
   if(S.mode==="partner" || S.mode==="none"){ renderPartner(); return; }
   $("#nav").hidden=false;
   renderTop(); renderNav(); renderMain(); renderSheet();
-  $("#fab").hidden = S.view!=="board" || !!S.openJob;
+  $("#fab").hidden = S.view!=="board" || !!S.openJob || !can("addLeads");
 }
 function syncBadge(){
   if(S.dbOk===null) return '<span class="dot"></span>Connecting';
@@ -738,8 +747,8 @@ function syncBadge(){
 function renderTop(){
   const titles={lost:"Lost Leads",profit:"Profit",settings:"Settings",reminders:"Reminders"};
   $("#top").innerHTML = `
-    <div class="brand"><div class="mark" aria-hidden="true"></div><h1>Red Hammer <span>CRM</span></h1><div class="sync">${syncBadge()}</div></div>
-    ${S.view==="board" ? `<div class="trades" role="group" aria-label="Trade">${TRADES.map(([k,l])=>{ const c=Object.values(S.jobs).filter(j=>j.trade===k&&needsAttn(j)).length; return `<button data-act="trade" data-v="${k}" aria-pressed="${S.trade===k}">${l}${c?`<span class="tbadge" aria-label="${c} need attention">${c}</span>`:""}</button>`; }).join("")}</div>`
+    <div class="brand"><div class="mark" aria-hidden="true"></div><h1>Red Hammer <span>${S.mode==="employee"?esc((S.me&&S.me.name)||"CRM"):"CRM"}</span></h1><div class="sync">${syncBadge()}</div></div>
+    ${S.view==="board" ? `<div class="trades" role="group" aria-label="Trade">${myTrades().map(([k,l])=>{ const c=Object.values(S.jobs).filter(j=>j.trade===k&&needsAttn(j)).length; return `<button data-act="trade" data-v="${k}" aria-pressed="${S.trade===k}">${l}${c?`<span class="tbadge" aria-label="${c} need attention">${c}</span>`:""}</button>`; }).join("")}</div>`
       : `<h2 class="viewtitle">${titles[S.view]}</h2>`}`;
 }
 function renderNav(){
@@ -1027,7 +1036,7 @@ function cardHTML(j){
       ${agePill(j)}
       ${j.trade==="roofing"?pathPill(j.claimPath):""}
       ${partner?`<span class="pill partner">${esc(partner.name)}</span>`:j.source?`<span class="pill">${esc(srcLabel(j))}</span>`:""}
-      ${c.contract?`<span class="amt num">${money(c.contract)}</span>`:""}
+      ${c.contract&&can("money")?`<span class="amt num">${money(c.contract)}</span>`:""}
     </span></button>`;
 }
 function boardView(){
@@ -1063,7 +1072,7 @@ function boardCols(){
     const list = jobs.filter(j=>j.stage===st).sort(st==="Appointment" ? (a,b)=>(a.appointmentAt||9e15)-(b.appointmentAt||9e15) : (a,b)=>attnSort(a,b) || ((b.lastContact||b.createdAt)-(a.lastContact||a.createdAt)));
     const sum = list.reduce((a,j)=>a+n(j.contract),0);
     return `<section class="col" data-stage="${esc(st)}" aria-label="${esc(st)}">
-      <div class="colhead"><h2>${esc(st)}</h2><span class="ct">${list.length}</span>${sum?`<span class="sum num">${money(sum)}</span>`:""}</div>
+      <div class="colhead"><h2>${esc(st)}</h2><span class="ct">${list.length}</span>${sum&&can("money")?`<span class="sum num">${money(sum)}</span>`:""}</div>
       ${list.map(cardHTML).join("") || (st==="Lead" && !jobs.length ? `<div class="empty-col">No ${tradeName(S.trade).toLowerCase()} leads yet. Tap + to add your first one.</div>` : `<div class="empty-col">Nothing here</div>`)}
     </section>`;
   }).join("");
@@ -1181,7 +1190,7 @@ function profitView(){
     </div>
     ${leadSourceSection(range, pl[S.period])}
     ${partners.length?`<div class="panel stack"><h3 class="sec">Partner share · ${pl[S.period].toLowerCase()}</h3><div class="list">${partners.map(x=>`<div class="li"><div class="grow t">${esc(x.p.name)}</div><b class="num">${money(x.v)}</b></div>`).join("")}</div></div>`:""}
-    ${(()=>{ const tj=Object.values(S.jobs).filter(j=>(partnerFor(j)||{}).id==="tony"); if(!tj.length) return ""; const t=partnerTotals(tj);
+    ${(()=>{ const tj=Object.values(S.jobs).filter(j=>(partnerFor(j)||{}).id==="tony"); if(!tj.length || S.mode!=="owner") return ""; const t=partnerTotals(tj);
       return `<div class="panel stack"><h3 class="sec">Tony · all time</h3><div class="list num">
         <div class="li"><div class="grow">Earned (closed jobs)</div><b>${money(t.earned)}</b></div>
         <div class="li"><div class="grow">Paid to Tony</div><b>${money(t.paid)}</b></div>
@@ -1197,9 +1206,65 @@ function profitView(){
 }
 
 /* ----- settings ----- */
+function employeeSettings(){
+  const t=S.me&&S.me.notify_topic;
+  return `<div class="stack">
+    <div class="panel stack"><h3 class="sec">Account</h3>
+      <p class="small muted" style="margin:0">Signed in as ${esc(session?.user?.email||"")}${S.me&&S.me.name?" ("+esc(S.me.name)+")":""}.</p>
+      <div class="row"><button class="btn" data-act="signOut">Sign out</button><button class="btn" data-act="forceUpdate">Get latest version</button></div></div>
+    <div class="panel stack"><h3 class="sec">Reminder alarms on your phone</h3>
+      ${t?`<ol class="small" style="margin:0;padding-left:20px;display:grid;gap:4px"><li>Install the free <b>ntfy</b> app.</li><li>Tap <b>+</b> and enter: <b class="num" style="user-select:all">${esc(t)}</b></li><li>Tap <b>Subscribe</b>.</li></ol>
+        <div class="row"><button class="btn" data-act="copy" data-v="${esc(t)}">Copy topic</button><button class="btn primary" data-act="testMyAlarm">Send test alarm</button></div>`:`<p class="small muted" style="margin:0">Ask Gabriel to turn on alarms for your login.</p>`}
+    </div>
+    <p class="small muted" style="margin:0">App version ${APP_VERSION}</p></div>`;
+}
+function employeesPanel(){
+  if(S.employees===undefined || S.employees===null){ if(!S.empLoading){ S.empLoading=true; sb.from("employees").select("*").order("name").then(({data,error})=>{ S.empLoading=false; S.employees=error?[]:(data||[]); S.empErr=error?error.message:""; const box=$("#empBox"); if(box) box.innerHTML=employeesList(); }); } return `<div id="empBox"><p class="small muted" style="margin:0">Loading…</p></div>`; }
+  return `<div id="empBox">${employeesList()}</div>`;
+}
+function employeesList(){
+  if(S.empErr) return `<p class="small muted" style="margin:0">Employees aren't set up yet. Paste employees-setup.sql in Supabase → SQL Editor first.</p>`;
+  const list=S.employees||[];
+  return `${list.length?`<div class="list">${list.map(e=>`<div class="li"><div class="grow"><div class="t">${esc(e.name||e.email)} ${e.active?"":`<span class="tag bad">Off</span>`}</div>
+    <div class="s">${esc(e.email)} · ${PERMS.filter(p=>e.perms&&e.perms[p[0]]).length} of ${PERMS.length} permissions</div></div><button class="btn small" data-act="editEmployee" data-id="${esc(e.email)}">Edit</button></div>`).join("")}</div>`:`<p class="small muted" style="margin:0">No employees yet.</p>`}
+    <button class="btn" data-act="editEmployee" data-id="">+ Add employee</button>`;
+}
+function editEmployee(email){
+  const e=(S.employees||[]).find(x=>x.email===email) || {email:"", name:"", perms:{}, active:true};
+  let perms={...(e.perms||{})};
+  openModal(`<h2>${e.email?"Edit employee":"Add employee"}</h2>
+    <div class="field"><label for="em-name">Name</label><input class="input" id="em-name" value="${esc(e.name||"")}"></div>
+    <div class="field"><label for="em-email">Login email</label><input class="input" id="em-email" type="email" value="${esc(e.email)}" ${e.email?"readonly":""}></div>
+    <div class="field"><span class="label" style="font-size:12px">Quick set</span><div class="chips">${Object.keys(PRESETS).map(k=>`<button type="button" class="chip" data-preset="${k}">${k}</button>`).join("")}<button type="button" class="chip" data-preset="">Nothing</button></div></div>
+    <div class="field"><span class="label" style="font-size:12px">What they can do</span>
+      <div class="list" id="em-perms">${PERMS.map(([k,l])=>`<label class="li" style="cursor:pointer;gap:12px"><input type="checkbox" data-perm="${k}" ${perms[k]?"checked":""} style="width:22px;height:22px;accent-color:var(--red)"><span class="grow">${esc(l)}</span></label>`).join("")}</div></div>
+    <label class="row" style="gap:10px;cursor:pointer"><input type="checkbox" id="em-active" ${e.active?"checked":""} style="width:22px;height:22px;accent-color:var(--good)"> <span>Login turned on</span></label>
+    <p class="small muted" style="margin:0">Only you can see Settings, Tony's split, backups and employees. ${e.email?"":"After saving, create their login in Supabase → Authentication → Users → Add user, with this same email."}</p>
+    <div class="row"><button class="btn primary" id="em-save">Save</button><button class="btn ghost" data-act="closeModal">Cancel</button>${e.email?`<button class="btn ghost danger" id="em-del" style="margin-left:auto">Remove</button>`:""}</div>`, box=>{
+    box.querySelectorAll("[data-preset]").forEach(b=>b.addEventListener("click",()=>{ const p=PRESETS[b.dataset.preset]||{}; box.querySelectorAll("[data-perm]").forEach(c=>c.checked=!!p[c.dataset.perm]); }));
+    box.querySelector("#em-save").addEventListener("click", async ()=>{
+      const email=box.querySelector("#em-email").value.trim().toLowerCase(), name=box.querySelector("#em-name").value.trim();
+      if(!email || !/@/.test(email)){ toast("Add their login email"); return; }
+      if(email===OWNER_EMAIL){ toast("That's your own login"); return; }
+      const p={}; box.querySelectorAll("[data-perm]").forEach(c=>{ if(c.checked) p[c.dataset.perm]=true; });
+      if(!["b_roofing","b_granite","b_other"].some(k=>p[k])){ toast("Pick at least one board"); return; }
+      const rowE={email, name, perms:p, active:box.querySelector("#em-active").checked, notify_topic:e.notify_topic||("rh-e-"+Array.from(crypto.getRandomValues(new Uint8Array(10)),b=>b.toString(36).padStart(2,"0")).join("").slice(0,16)), updated_at:new Date().toISOString()};
+      const {error}=await sb.from("employees").upsert(rowE);
+      if(error){ toast("Didn't save: "+error.message); return; }
+      S.employees=null; closeModal(); toast("Employee saved"); render();
+    });
+    box.querySelector("#em-del")?.addEventListener("click", ()=>confirmBox("Remove "+(e.name||e.email)+"?", "They lose access right away. Also delete their login in Supabase → Authentication → Users.", "Remove", async ()=>{
+      const {error}=await sb.from("employees").delete().eq("email", e.email); if(error){ toast(error.message); return; } S.employees=null; toast("Removed"); render(); }));
+  });
+}
 function settingsView(){
+  if(S.mode==="employee") return employeeSettings();
   const ps = S.settings.partners;
   return `<div class="stack">
+    <div class="panel stack"><h3 class="sec">Employees</h3>
+      <p class="small muted" style="margin:0">Give someone a login and check exactly what they can see and do.</p>
+      ${employeesPanel()}
+    </div>
     <div class="panel stack"><h3 class="sec">Lead partners</h3>
       <p class="small muted" style="margin:0">A split only applies to jobs whose <b>lead source</b> is that partner. Set the percentage and whether it comes off profit or the contract price. You can override it on any single job. Only you see this.</p>
       ${(()=>{ const list = ps.some(p=>p.id==="tony"||/^tony$/i.test(p.name)) ? ps : [TONY_DEFAULT, ...ps];
@@ -1254,11 +1319,13 @@ function renderSheet(){
   if(!j){ el.innerHTML=""; if(S.openJob && S.ready){ S.openJob=null; } return; }
   const c = calc(j);
   const scrollY = el.firstElementChild ? el.firstElementChild.scrollTop : 0;
-  const tabs=[["info","Info"],["money","Money"],["notes","Notes"],["files","Files"]];
+  const tabs=[["info","Info"],["money","Money"],["notes","Notes"],["files","Files"]].filter(([k])=>(k!=="money"||can("money"))&&(k!=="files"||can("files")));
+  if(!tabs.some(t=>t[0]===S.jobTab)) S.jobTab="info";
   el.innerHTML = `<div class="sheet" role="dialog" aria-label="${esc(j.name)}">
     <div class="sheethead">
       <div class="rowtop"><button class="back" data-act="close" aria-label="Back to board">‹ Back</button><div class="jn">${esc(j.name||"No name")}</div><div class="tr">${esc(tradeName(j.trade))}${j.lost?" · Lost":""}</div></div>
-      <div class="hero">
+      ${!can("money")?`<div class="hero"><div class="big"><span class="v" style="font-size:28px">${esc(j.lost?"Lost":j.stage)}</span><span class="k">${ageDays(j)} days old</span></div></div>`:""}
+      <div class="hero" ${can("money")?"":"hidden"}>
         <div class="big"><span class="v num ${c.net<0?"neg":""}">${money(c.net)}</span><span class="k">${c.partner?"your profit":"profit"}</span></div>
         <div class="kv num"><div><span>Contract</span><b>${money(c.contract)}</b></div><div><span>Expenses</span><b>${money(c.expenses)}</b></div><div><span>Balance due</span><b>${money(c.balance)}</b></div></div>
       </div>
@@ -1267,6 +1334,7 @@ function renderSheet(){
     <div class="sheetbody">${S.jobTab==="info"?jobInfo(j):S.jobTab==="money"?jobMoney(j,c):S.jobTab==="notes"?jobReminders(j)+jobNotes(j):jobFiles(j)}</div>
   </div>`;
   el.firstElementChild.scrollTop = scrollY;
+  if(S.mode==="employee") el.querySelectorAll("[data-field]").forEach(f=>{ if(!can(f.dataset.field==="contract"?"money":"edit")){ if(f.tagName==="SELECT") f.disabled=true; else f.readOnly=true; } });
 }
 function sel(field, opts, val, extra=""){
   return `<select class="input" id="f-${field}" data-field="${field}" ${extra}>${opts.map(o=>{ const [v,l]=Array.isArray(o)?o:[o,o]; return `<option value="${esc(v)}" ${String(val??"")===String(v)?"selected":""}>${esc(l)}</option>`; }).join("")}</select>`;
@@ -1276,6 +1344,7 @@ function jobInfo(j){
   const maps = j.address ? "https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(j.address) : "";
   return `
   ${j.lost?`<div class="banner"><b>Lost:</b> ${esc(j.lostReason||"")} (${fdate(j.lostAt)}) <button class="btn small" data-act="reopen" data-id="${esc(j.id)}" style="margin-left:8px">Reopen</button></div>`:""}
+  ${can("expenses")&&!can("money")?`<button class="btn primary block" data-act="addExpense">+ Add expense / receipt photo</button>`:""}
   <div class="panel stack" style="gap:6px"><label class="label" for="f-faceNote">Face note · shows on the card</label>
     <input class="input" id="f-faceNote" data-field="faceNote" maxlength="120" value="${esc(j.faceNote||"")}" placeholder="e.g. Wants metal, wife decides, call after 5">
   </div>
@@ -1351,9 +1420,9 @@ function jobInfo(j){
     </div>
     <button class="btn" disabled>Create estimate in the CRM (coming soon)</button>
   </div>
-  <div class="row">
-    <button class="btn danger" data-act="removeLead">${j.lost?"Delete forever":"Mark lost or delete"}</button>
-  </div>
+  ${(can("edit")||can("delete"))?`<div class="row">
+    <button class="btn danger" data-act="removeLead">${j.lost?"Delete forever":(can("edit")?(can("delete")?"Mark lost or delete":"Mark lost"):"Delete forever")}</button>
+  </div>`:""}
   <p class="small muted" style="margin:0">Added ${fdate(j.createdAt)}</p>`;
 }
 function driveTag(){ return ""; }
@@ -1377,7 +1446,7 @@ function jobMoney(j,c){
       <div class="li"><div class="grow"><b>You keep</b></div><b>${money(c.net,1)}</b></div>`:""}
     </div>
   </div>
-  ${c.partner?`<div class="panel stack"><h3 class="sec">Split for this job</h3>
+  ${c.partner&&S.mode==="owner"?`<div class="panel stack"><h3 class="sec">Split for this job</h3>
     <p class="small muted" style="margin:0">Leave blank to use ${esc(p?p.name:"the partner")}'s default (${n(p?.pct)}% of ${p?.basis==="contract"?"contract":"profit"}).</p>
     <div class="grid2">
       <div class="field"><label for="f-splitPct">Split %</label><input class="input num" id="f-splitPct" data-field="splitPct" type="number" inputmode="decimal" min="0" max="100" step="0.5" value="${j.splitPct??""}" placeholder="Default"></div>
@@ -1394,7 +1463,7 @@ function jobMoney(j,c){
     </div>`:""}
   <div class="panel stack">
     <h3 class="sec">Expenses & receipts <span class="r num" style="font-family:var(--f-body);letter-spacing:0">${money(c.expenses,1)}</span></h3>
-    <button class="btn primary block" data-act="addExpense">+ Add expense</button>
+    ${can("expenses")?`<button class="btn primary block" data-act="addExpense">+ Add expense</button>`:""}
     ${ex.length?`<div class="list">${ex.map(e=>`<div class="li">
       ${e.assetId?`<a href="${urlFor(e.assetId)||"#"}" target="_blank" rel="noopener"><img class="thumb" src="${urlFor(e.assetId)||PIXEL}" alt="Receipt photo"></a>`:`<div class="thumb">No photo</div>`}
       <div class="grow"><div class="t num">${money(n(e.amount),1)} · ${esc(e.category)}${e.subContactId&&contactById("subs",e.subContactId)?" · "+esc(contactById("subs",e.subContactId).name):""}</div><div class="s">${fdate(e.date)}${e.desc?" · "+esc(e.desc):""}</div>${e.assetId?`<div style="margin-top:4px">${driveTag({...e,_list:"expenses"})}</div>`:""}</div>
@@ -1403,7 +1472,7 @@ function jobMoney(j,c){
   </div>
   <div class="panel stack">
     <h3 class="sec">Payments <span class="r num" style="font-family:var(--f-body);letter-spacing:0">${money(c.paid,1)} paid</span></h3>
-    <button class="btn block" data-act="addPayment">+ Record payment</button>
+    ${can("payments")?`<button class="btn block" data-act="addPayment">+ Record payment</button>`:""}
     ${pay.length?`<div class="list">${pay.map(p=>`<div class="li">
       <div class="grow"><div class="t num">${ORD[[...(j.payments||[])].sort((a,b)=>(a.date||0)-(b.date||0)).findIndex(x=>x.id===p.id)]||""} payment · ${money(n(p.amount),1)} · ${esc(p.method)}</div><div class="s">${fdate(p.date)}${p.receiptNo?" · Receipt "+esc(p.receiptNo):""}${p.note?" · "+esc(p.note):""}</div>
       <div class="row" style="margin-top:6px;gap:6px">${p.assetId?`<a class="btn small" href="${urlFor(p.assetId)||"#"}" target="_blank" rel="noopener">View receipt</a><button class="btn small primary" data-act="dlReceipt" data-item="${esc(p.id)}">Send / save</button>`:""}<button class="btn small" data-act="addPayPhoto" data-item="${esc(p.id)}">+ Photo</button></div>
@@ -1411,7 +1480,7 @@ function jobMoney(j,c){
       ${S.isOwner?`<button class="btn small ghost danger" data-act="delItem" data-list="payments" data-item="${esc(p.id)}" aria-label="Delete payment">✕</button>`:""}
     </div>`).join("")}</div>`:""}
     <div class="tot num"><span>Balance due</span><span>${money(c.balance,1)}</span></div>
-    ${pay.length?`<button class="btn primary block" data-act="makeReceipt">🧾 Make a receipt</button>`:""}
+    ${pay.length&&can("payments")?`<button class="btn primary block" data-act="makeReceipt">🧾 Make a receipt</button>`:""}
     ${(()=>{ const rc=(j.docs||[]).filter(d=>d.category==="Receipt").sort((a,b)=>b.t-a.t); return rc.length?`<div class="label">Receipts made</div><div class="list">${rc.map(d=>`<div class="li"><div class="grow"><div class="t">${esc(d.name)}</div><div class="s">${fdate(d.t)}</div></div>
       <a class="btn small" href="${urlFor(d.assetId)||"#"}" target="_blank" rel="noopener">View</a><button class="btn small primary" data-act="sendDoc" data-item="${esc(d.id)}">Send / save</button></div>`).join("")}</div>`:""; })()}
   </div>`;
@@ -1449,7 +1518,7 @@ function jobFiles(j){
   return `<div class="panel stack">
     <h3 class="sec">Documents</h3>
     <p class="small muted" style="margin:0">Contracts, insurance scopes, photos. Photos and PDFs work best.</p>
-    <div class="dropzone" id="docDrop">
+    <div class="dropzone" id="docDrop" ${can("files")?"":"hidden"}>
       <b>Drop files here</b><span class="small muted">PDFs and photos, one or many</span>
       <span class="btn primary filebtn" style="margin-top:6px">+ Choose files<input id="docInput" type="file" accept="image/*,application/pdf" multiple aria-label="Upload documents"></span>
     </div>
@@ -1707,12 +1776,12 @@ function makeReceipt(){
   });
 }
 function removeLead(id){
-  const j=S.jobs[id||S.openJob]; if(!j) return; const canDel=can("delete");
+  const j=S.jobs[id||S.openJob]; if(!j) return; const canDel=can("delete"); if(!canDel && (j.lost||!can("edit"))){ toast("You don't have access to that"); return; }
   openModal(`<h2>${j.lost?"Delete forever":"Remove this lead"}</h2><p class="muted" style="margin:0">${esc(j.name||"")}${j.address?" · "+esc(j.address):""}</p>
     <div class="chips">${LOST_REASONS.map((r,i)=>`<button type="button" class="chip" data-pick="r" data-v="${esc(r)}" aria-pressed="${i===0}">${esc(r)}</button>`).join("")}</div>
     <div class="field"><label for="rm-note">Why? (required)</label><textarea class="input" id="rm-note" placeholder="What happened"></textarea></div>
     <div class="stack" style="gap:8px">
-      ${j.lost?"":`<button class="btn primary block" id="rm-lost">Move to Lost Leads</button><p class="small muted" style="margin:-4px 0 0">Keeps everything so you can call back later.</p>`}
+      ${(j.lost||!can("edit"))?"":`<button class="btn primary block" id="rm-lost">Move to Lost Leads</button><p class="small muted" style="margin:-4px 0 0">Keeps everything so you can call back later.</p>`}
       ${canDel?`<button class="btn block danger" id="rm-del" style="border-color:var(--red)">Delete forever</button><p class="small muted" style="margin:-4px 0 0">For dead files you'll never use. Removes the job, notes, money and files for good. Only the name and reason are kept in a deleted log.</p>`:""}
       <button class="btn ghost" data-act="closeModal">Cancel</button>
     </div>`, box=>{
@@ -1796,7 +1865,7 @@ function editPartner(id){
 /* ---------- actions ---------- */
 const ACT = {
   trade:b=>{ S.trade=b.dataset.v; try{localStorage.setItem("rh-trade",S.trade);}catch(e){} render(); },
-  view:b=>{ S.view=b.dataset.v; S.openJob=null; if(S.view==="settings") S.usage=undefined; render(); window.scrollTo(0,0); },
+  view:b=>{ S.view=b.dataset.v; S.openJob=null; if(S.view==="settings"){ S.usage=undefined; S.employees=null; } render(); window.scrollTo(0,0); },
   open:b=>{ if($("#modal").innerHTML) closeModal(); S.openJob=b.dataset.id; S.jobTab="info"; render(); },
   close:()=>{ S.openJob=null; render(); },
   jtab:b=>{ S.jobTab=b.dataset.v; render(); const sh=$("#sheet .sheet"); if(sh) sh.scrollTop=0; },
@@ -1813,6 +1882,8 @@ const ACT = {
     mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; if(st==="Built" && !x.builtAt) x.builtAt=Date.now(); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
   },
   setPath:b=>setPath(S.openJob, b.dataset.v),
+  editEmployee:b=>editEmployee(b.dataset.id),
+  testMyAlarm:async()=>{ const ok=await pushAlert(myTopic(),{title:"Red Hammer CRM test alarm", message:"Reminder alarms are working.", priority:5, tags:"alarm_clock"}); toast(ok?"Test alarm sent":"Couldn't reach the alarm service"); },
   newReminder:b=>newReminder(b.dataset.id || (S.view!=="reminders" || S.openJob ? S.openJob : null)),
   remDone:b=>{ setRem(b.dataset.job, b.dataset.item, r=>{ r.done=true; r.doneAt=Date.now(); }); toast("Done"); },
   remUndo:b=>{ setRem(b.dataset.job, b.dataset.item, r=>{ r.done=false; r.doneAt=null; }); },
@@ -1894,6 +1965,8 @@ const ACT = {
     mutateJob(id, x=>{ x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"note",text}); x.lastContact=Date.now(); x.attnAck=Math.max(x.attnAck||0, ageLevel(x)); });
   },
   delItem:b=>{
+    const needL={expenses:"expenses",payments:"payments",notes:"edit",docs:"files",partnerPayouts:"owner",subs:"edit"}[b.dataset.list]||"edit";
+    if(!(needL==="owner"?S.mode==="owner":can(needL))){ toast("You don't have access to that"); return; }
     const id=S.openJob, list=b.dataset.list, item=b.dataset.item;
     const labels={expenses:"expense",payments:"payment",notes:"note",docs:"document",partnerPayouts:"payout",subs:"sub from this job"};
     confirmBox("Delete "+labels[list]+"?", "This can't be undone. Any copy already in Google Drive stays there.", "Delete", async ()=>{
@@ -1920,8 +1993,13 @@ const ACT = {
   ptab:b=>{ S.ptab=b.dataset.v; S.openJob=null; render(); window.scrollTo(0,0); },
   forceUpdate:()=>location.replace(location.pathname+"?v="+Date.now()),
 };
+const NEED = {stage:"edit", nextStage:"edit", toggleSigned:"edit", toggleBuilt:"edit", setPath:"edit", ackAttn:"edit", addNote:"edit", logCall:"edit", logEmail:"edit",
+  reopen:"edit", addPayPhoto:"payments", addPayment:"payments", makeReceipt:"payments", addExpense:"expenses", estToContract:"money", addPayout:"owner", editPartner:"owner",
+  backupJson:"owner", backupCsv:"owner", testAlarm:"owner", editEmployee:"owner", editContact:"owner", subProfile:"owner", quickAdd:"addLeads"};
 document.addEventListener("click", e=>{
   const a=e.target.closest("[data-act]"); if(!a) return;
+  const need=NEED[a.dataset.act];
+  if(need && !(need==="owner" ? S.mode==="owner" : can(need))){ e.preventDefault(); toast("You don't have access to that"); return; }
   if(a.dataset.act==="modalBg" && e.target!==a) return;
   const fn=ACT[a.dataset.act]; if(!fn) return;
   if(a.tagName!=="A") e.preventDefault();
@@ -1951,6 +2029,7 @@ document.addEventListener("change", e=>{
     mutateJob(S.openJob, x=>{ const a=(x.subs||[]).find(y=>y.id===sid); if(a) a[k]=v; }); return;
   }
   const f=el.dataset.field; if(!f || !S.openJob) return;
+  if(!can(f==="contract"?"money":"edit")){ toast("You don't have access to change that"); render(); return; }
   let v=el.value;
   if(f==="contract") v = v==="" ? null : n(v);
   if(f==="appointmentAt") v = v ? new Date(v).getTime() : null;
@@ -2067,10 +2146,22 @@ async function loadAll(){
     else{
       const {data}=await sb.from("partner_accounts").select("*").eq("email", email).maybeSingle();
       if(data){ S.mode="partner"; S.me=data; S.isOwner=false; S.settings={...DEFAULT_SETTINGS, partners:[{id:data.partner_id, name:data.name||"Partner", pct:n(data.pct), basis:data.basis||"profit"}]}; }
-      else S.mode="none";
+      else{
+        const {data:emp}=await sb.from("employees").select("*").eq("email", email).maybeSingle();
+        if(emp && emp.active){ S.mode="employee"; S.me=emp; S.isOwner=false; S.me.perms=emp.perms||{}; }
+        else S.mode="none";
+      }
     }
   }
   if(S.mode==="none"){ S.ready=true; render(); return; }
+  if(S.mode==="employee"){
+    const [jr, st] = await Promise.all([ sb.from("jobs").select("id,data"), sb.from("settings").select("data").eq("id",1).maybeSingle() ]);
+    if(jr.error){ S.dbOk=false; S.dbErr=jr.error.message; S.ready=true; render(); return; }
+    const m={}; (jr.data||[]).forEach(r=>{ m[r.id]={...r.data, id:r.id}; }); S.jobs=m;
+    if(st.data && st.data.data) S.settings={...DEFAULT_SETTINGS, ...st.data.data};
+    if(!myTrades().some(([k])=>k===S.trade) && myTrades().length) S.trade=myTrades()[0][0];
+    S.ready=true; S.dbOk=true; S.dbErr=""; render(); sweepReminders(); return;
+  }
   if(S.mode==="partner"){
     const jr = await sb.from("jobs").select("id,data").eq("partner_id", S.me.partner_id);
     if(jr.error){ S.dbOk=false; S.dbErr=jr.error.message; S.ready=true; render(); return; }
@@ -2106,7 +2197,7 @@ function subscribe(){
 sb.auth.onAuthStateChange((ev, sess)=>{
   const was = !!session; session = sess; S.authReady=true;
   if(sess && !was){ S.ready=false; render(); setTimeout(()=>{ loadAll(); subscribe(); }, 0); }
-  if(!sess){ S.jobs={}; S.ready=false; S.openJob=null; S.mode=""; S.me=null; S.ptab="new"; S.isOwner=true; S.settings={...DEFAULT_SETTINGS}; if(channel){ sb.removeChannel(channel); channel=null; } render(); }
+  if(!sess){ S.jobs={}; S.ready=false; S.openJob=null; S.employees=null; S.mode=""; S.me=null; S.ptab="new"; S.isOwner=true; S.settings={...DEFAULT_SETTINGS}; if(channel){ sb.removeChannel(channel); channel=null; } render(); }
 });
 window.addEventListener("online", ()=>{ if(session){ S.dbOk=true; loadAll(); } });
 window.addEventListener("offline", ()=>{ S.dbOk=false; renderSoon(); });
