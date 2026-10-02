@@ -304,7 +304,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Oct 1 · employees";
+const APP_VERSION = "Oct 1 · profit dates";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -1102,6 +1102,16 @@ function lostView(){
 }
 
 /* ----- profit ----- */
+const ymd = d => d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+function monthDefault(){ const d=new Date(); return [ymd(new Date(d.getFullYear(),d.getMonth(),1)), ymd(new Date(d.getFullYear(),d.getMonth()+1,0))]; }
+const parseYmd = v => { const [y,m,d]=String(v).split("-").map(Number); return new Date(y,m-1,d); };
+function profitRange(){
+  if(!S.pFrom || !S.pTo){ const [a,b]=monthDefault(); S.pFrom=S.pFrom||a; S.pTo=S.pTo||b; }
+  let a=parseYmd(S.pFrom), b=parseYmd(S.pTo); if(b<a) [a,b]=[b,a];
+  const end=new Date(b.getFullYear(),b.getMonth(),b.getDate()+1);
+  const f=d=>MONTHS[d.getMonth()]+" "+d.getDate()+(d.getFullYear()!==new Date().getFullYear()||a.getFullYear()!==b.getFullYear()?", "+d.getFullYear():"");
+  return {range:[a.getTime(), end.getTime()], label: f(a)+" – "+f(b)};
+}
 function periodRange(p){
   const d=new Date(), y=d.getFullYear(), m=d.getMonth(), t=(Y,M)=>new Date(Y,M,1).getTime();
   if(p==="month") return [t(y,m), Infinity];
@@ -1167,7 +1177,7 @@ function leadSourceSection(range, pl){
     </div>`;
 }
 function profitView(){
-  const range = periodRange(S.period);
+  const {range, label} = profitRange();
   const all = Object.values(S.jobs);
   const closed = all.filter(j=>!j.lost && isClosed(j) && inRange(j.closedAt||j.updatedAt, range));
   const open = all.filter(j=>!j.lost && !isClosed(j));
@@ -1179,17 +1189,20 @@ function profitView(){
   const partners = (S.settings.partners.some(p=>p.id==="tony"||/^tony$/i.test(p.name))?S.settings.partners:[...S.settings.partners,TONY_DEFAULT]).map(p=>({p, v: closed.filter(j=>(partnerFor(j)||{}).id===p.id).reduce((a,j)=>a+calc(j).cut,0)})).filter(x=>x.v);
   const pl = {month:"This month", lastmonth:"Last month", year:"This year", lastyear:"Last year", all:"All time"};
   return `<div class="stack">
-    <div class="chips" role="group" aria-label="Period">${Object.entries(pl).map(([k,l])=>`<button class="chip" data-act="period" data-v="${k}" aria-pressed="${S.period===k}">${l}</button>`).join("")}</div>
+    <div class="panel" style="padding:12px 14px"><div class="row" style="gap:10px;align-items:flex-end;flex-wrap:nowrap">
+      <div class="field" style="flex:1;min-width:0;margin:0"><label for="pf-from">From</label><input class="input" type="date" id="pf-from" value="${S.pFrom}"></div>
+      <div class="field" style="flex:1;min-width:0;margin:0"><label for="pf-to">To</label><input class="input" type="date" id="pf-to" value="${S.pTo}"></div>
+    </div>${(()=>{ const [a,b]=monthDefault(); return (S.pFrom!==a||S.pTo!==b)?`<button class="btn small ghost" data-act="pfReset" style="margin-top:8px">Back to this month</button>`:""; })()}</div>
     <div class="phero">
-      <div><div class="label" style="color:var(--bar-muted)">You kept · ${pl[S.period].toLowerCase()}</div><div class="v num">${money(tot.net)}</div>
+      <div><div class="label" style="color:var(--bar-muted)">You kept · ${esc(label)}</div><div class="v num">${money(tot.net)}</div>
       <div class="small" style="color:var(--bar-muted)">${closed.length} closed job${closed.length===1?"":"s"}</div></div>
       <div class="kv num"><div><span>Revenue</span><b>${money(tot.rev)}</b></div><div><span>Expenses</span><b>${money(tot.exp)}</b></div><div><span>Partner share</span><b>${money(tot.cut)}</b></div></div>
     </div>
     <div class="panel stack"><h3 class="sec">By trade</h3>
       <div class="bars">${byTrade.map(t=>`<div class="bar"><div class="top2"><span>${t.l} <span class="muted small">${t.c} job${t.c===1?"":"s"}</span></span><b class="num">${money(t.v)}</b></div><div class="track"><div class="fill ${t.v<0?"negf":""}" style="width:${Math.round(Math.abs(t.v)/maxT*100)}%"></div></div></div>`).join("")}</div>
     </div>
-    ${leadSourceSection(range, pl[S.period])}
-    ${partners.length?`<div class="panel stack"><h3 class="sec">Partner share · ${pl[S.period].toLowerCase()}</h3><div class="list">${partners.map(x=>`<div class="li"><div class="grow t">${esc(x.p.name)}</div><b class="num">${money(x.v)}</b></div>`).join("")}</div></div>`:""}
+    ${leadSourceSection(range, label)}
+    ${partners.length?`<div class="panel stack"><h3 class="sec">Partner share · ${esc(label)}</h3><div class="list">${partners.map(x=>`<div class="li"><div class="grow t">${esc(x.p.name)}</div><b class="num">${money(x.v)}</b></div>`).join("")}</div></div>`:""}
     ${(()=>{ const tj=Object.values(S.jobs).filter(j=>(partnerFor(j)||{}).id==="tony"); if(!tj.length || S.mode!=="owner") return ""; const t=partnerTotals(tj);
       return `<div class="panel stack"><h3 class="sec">Tony · all time</h3><div class="list num">
         <div class="li"><div class="grow">Earned (closed jobs)</div><b>${money(t.earned)}</b></div>
@@ -1870,6 +1883,7 @@ const ACT = {
   close:()=>{ S.openJob=null; render(); },
   jtab:b=>{ S.jobTab=b.dataset.v; render(); const sh=$("#sheet .sheet"); if(sh) sh.scrollTop=0; },
   period:b=>{ S.period=b.dataset.v; render(); },
+  pfReset:()=>{ [S.pFrom,S.pTo]=monthDefault(); render(); },
   quickAdd, addExpense, addPayment, markLost,
   pickDoc:()=>$("#docInput")?.click(),
   closeModal, modalBg:(b,e)=>{ if(e.target===b) closeModal(); },
@@ -2009,6 +2023,7 @@ document.addEventListener("click", e=>{
 /* field edits on the job sheet */
 document.addEventListener("change", e=>{
   const el=e.target;
+  if(el.id==="pf-from"||el.id==="pf-to"){ if(!el.value) return; if(el.id==="pf-from") S.pFrom=el.value; else S.pTo=el.value; render(); return; }
   if(el.id==="docInput"){ uploadDoc(el); return; }
   if(el.id==="estInput"){ uploadDoc(el, "Estimate"); return; }
   if(el.dataset.esttotal && S.openJob){ const did=el.dataset.esttotal, v=el.value===""?null:n(el.value); mutateJob(S.openJob, x=>{ const d=(x.docs||[]).find(y=>y.id===did); if(d) d.total=v; }); return; }
