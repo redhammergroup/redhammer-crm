@@ -317,7 +317,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Oct 18 · offline + alarms";
+const APP_VERSION = "Oct 18 · Tony split only on his jobs";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -919,7 +919,7 @@ function backupCsv(){
   const head=["Board","Stage","Name","Phone","Email","Address","Lead source","Appointment","Added","Contract","Expenses","Paid by customer","Balance due","Profit","Partner share","You keep","Signed contingency","Lost","Lost reason","Insurance","Claim #"];
   const rows=Object.values(S.jobs).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0)).map(j=>{ const c=calc(j);
     return [tradeName(j.trade), j.lost?"Lost":j.stage, j.name, j.phone, j.email, j.address, srcLabel(j), j.appointmentAt?new Date(j.appointmentAt).toLocaleString("en-US"):"", d(j.createdAt),
-      c.contract.toFixed(2), c.expenses.toFixed(2), c.paid.toFixed(2), c.balance.toFixed(2), c.profit.toFixed(2), c.cut.toFixed(2), c.net.toFixed(2), j.signedAt?d(j.signedAt):"", j.lost?"Yes":"", j.lostReason, j.carrier, j.claimNo].map(q).join(","); });
+      c.contract.toFixed(2), c.expenses.toFixed(2), c.paid.toFixed(2), c.balance.toFixed(2), c.profit.toFixed(2), c.partner?c.cut.toFixed(2):"", c.net.toFixed(2), j.signedAt?d(j.signedAt):"", j.lost?"Yes":"", j.lostReason, j.carrier, j.claimNo].map(q).join(","); });
   saveFile(`redhammer-customers-${stamp()}.csv`, "\ufeff"+[head.join(","),...rows].join("\r\n"), "text/csv");
   toast("Customer list downloaded");
 }
@@ -1238,7 +1238,7 @@ function profitView(){
     <div class="phero">
       <div><div class="label" style="color:var(--bar-muted)">You kept · ${esc(label)}</div><div class="v num">${money(tot.net)}</div>
       <div class="small" style="color:var(--bar-muted)">${closed.length} closed job${closed.length===1?"":"s"}</div></div>
-      <div class="kv num"><div><span>Revenue</span><b>${money(tot.rev)}</b></div><div><span>Expenses</span><b>${money(tot.exp)}</b></div><div><span>Partner share</span><b>${money(tot.cut)}</b></div></div>
+      <div class="kv num" ${tot.cut?"":'style="grid-template-columns:repeat(2,1fr)"'}><div><span>Revenue</span><b>${money(tot.rev)}</b></div><div><span>Expenses</span><b>${money(tot.exp)}</b></div>${tot.cut?`<div><span>${S.settings.partners.length>1?"Partner share":"Tony's share"}</span><b>${money(tot.cut)}</b></div>`:""}</div>
     </div>
     <div class="panel stack"><h3 class="sec">By trade</h3>
       <div class="bars">${byTrade.map(t=>`<div class="bar"><div class="top2"><span>${t.l} <span class="muted small">${t.c} job${t.c===1?"":"s"}</span></span><b class="num">${money(t.v)}</b></div><div class="track"><div class="fill ${t.v<0?"negf":""}" style="width:${Math.round(Math.abs(t.v)/maxT*100)}%"></div></div></div>`).join("")}</div>
