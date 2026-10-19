@@ -291,7 +291,8 @@ const STAGES = {
   other:   ["Lead","Estimate Sent","Won","In Progress","Payment Needed","Complete"]
 };
 const CLOSED = {roofing:"Complete", granite:"Paid", other:"Complete"};
-const TRADES = [["roofing","Roofing"],["granite","Granite"],["other","Other"]];
+const TRADES = [["roofing","Roofing"],["other","Retail"]]; /* "granite" board was folded into Retail; its stages stay in STAGES for old jobs */
+const JOB_TYPES = ["Granite","Countertops","Gutters","Paint","Siding","Fencing","Concrete","Other"];
 const SOURCES = ["Cold Call","Door Knock","Door Sign","Yard Sign","Referral","Tony","Angi","Google","Google Ad","Website","Craigslist","Other"];
 const sourceList = () => [...SOURCES.slice(0,-1), ...S.settings.partners.map(p=>p.name).filter(nm=>nm && !SOURCES.some(x=>x.toLowerCase()===String(nm).toLowerCase())), "Other"];
 const srcLabel = j => j.source==="Other" ? (String(j.sourceOther||"").trim() || "Other") : (j.source || "Not set");
@@ -317,7 +318,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Oct 18 · Tony split only on his jobs";
+const APP_VERSION = "Oct 18 · Roofing + Retail";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -328,7 +329,7 @@ const S = {
 };
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {auth:{persistSession:true, autoRefreshToken:true}});
 let session=null;
-try{ const t=localStorage.getItem("rh-trade"); if(t && STAGES[t]) S.trade=t; }catch(e){}
+try{ const t=localStorage.getItem("rh-trade"); if(t && TRADES.some(x=>x[0]===t)) S.trade=t; }catch(e){}
 
 /* ---------- helpers ---------- */
 const $ = s => document.querySelector(s);
@@ -464,14 +465,14 @@ function editContact(kind, id, onSaved){
   });
 }
 const PERMS = [
-  ["b_roofing","Roofing board"],["b_granite","Granite board"],["b_other","Other board"],
+  ["b_roofing","Roofing board"],["b_other","Retail board"],
   ["addLeads","Add new leads"],["edit","Edit jobs (stages, details, notes, mark lost)"],
   ["money","See money (prices, expenses, profit, payments)"],["expenses","Add expenses & receipt photos"],
   ["payments","Record customer payments & make receipts"],["files","View & upload documents"],
   ["lost","See Lost Leads"],["profit","See Profit reports"],["delete","Delete leads forever"]];
-const PRESETS = {Crew:{b_roofing:1,expenses:1,files:1}, Office:{b_roofing:1,b_granite:1,b_other:1,addLeads:1,edit:1,money:1,expenses:1,payments:1,files:1,lost:1}, Everything:Object.fromEntries(PERMS.map(p=>[p[0],1]))};
+const PRESETS = {Crew:{b_roofing:1,expenses:1,files:1}, Office:{b_roofing:1,b_other:1,addLeads:1,edit:1,money:1,expenses:1,payments:1,files:1,lost:1}, Everything:Object.fromEntries(PERMS.map(p=>[p[0],1]))};
 const myTrades = () => TRADES.filter(([k])=>can("b_"+k));
-const can = k => S.mode==="owner" || (S.mode==="employee" && !!(S.me && S.me.perms && S.me.perms[k]));
+const can = k => S.mode==="owner" || (S.mode==="employee" && !!(S.me && S.me.perms && (S.me.perms[k] || (k==="b_other" && S.me.perms.b_granite))));
 const TONY_DEFAULT = {id:"tony", name:"Tony", pct:15, basis:"profit"};
 function partnerFor(j){
   const src = String(srcLabel(j)).trim().toLowerCase();
@@ -1077,6 +1078,7 @@ function cardHTML(j){
       ${j.appointmentAt && j.appointmentAt>Date.now()-3*3600e3 ? `<span class="pill fresh">📅 ${esc(fdtLong(j.appointmentAt))}</span>`:""}
       ${agePill(j)}
       ${j.trade==="roofing"?pathPill(j.claimPath):""}
+      ${j.trade==="other"&&j.jobType?`<span class="pill">${esc(j.jobType)}</span>`:""}
       ${partner?`<span class="pill partner">${esc(partner.name)}</span>`:j.source?`<span class="pill">${esc(srcLabel(j))}</span>`:""}
       ${c.contract&&can("money")?`<span class="amt num">${money(c.contract)}</span>`:""}
     </span></button>`;
@@ -1090,7 +1092,7 @@ function boardArea(){ return (S.search||"").trim() ? searchResults() : attention
 function searchResults(){
   const q=(S.search||"").trim().toLowerCase(), qd=q.replace(/\D/g,"");
   const hits=Object.values(S.jobs).filter(j=>{
-    const hay=[j.name,j.address,j.email,j.claimNo,j.carrier,j.source].join(" ").toLowerCase();
+    const hay=[j.name,j.address,j.email,j.claimNo,j.carrier,j.source,j.jobType].join(" ").toLowerCase();
     return hay.includes(q) || (qd.length>=3 && digits(j.phone).replace(/\D/g,"").includes(qd));
   }).sort((a,b)=>(a.lost-b.lost)||String(a.name).localeCompare(String(b.name)));
   if(!hits.length) return `<div class="emptybox"><b>No customers match "${esc(S.search.trim())}"</b>Search checks every board and Lost Leads.</div>`;
@@ -1256,7 +1258,7 @@ function profitView(){
       <div><div class="label">Expected profit</div><b style="font-size:20px">${money(pipe.net)}</b><div class="small muted">after expenses so far</div></div></div>
       <div class="tot num"><span>Customers still owe you</span><span>${money(owed)}</span></div>
     </div>
-    <p class="small muted" style="margin:0">A job counts as closed when it reaches ${esc(CLOSED.roofing)} (roofing) or ${esc(CLOSED.granite)} (granite and other).</p>
+    <p class="small muted" style="margin:0">A job counts as closed when it reaches ${esc(CLOSED.roofing)} (roofing and retail).</p>
   </div>`;
 }
 
@@ -1452,6 +1454,7 @@ function jobInfo(j){
       <div class="field"><label for="f-claimNo">Claim number</label><input class="input" id="f-claimNo" data-field="claimNo" value="${esc(j.claimNo)}"></div>
     </div>`:""}
     <div class="field"><label for="f-trade">Board</label>${sel("trade",TRADES,j.trade)}</div>
+    ${j.trade==="other"?`<div class="field"><label for="f-jobType">Job type</label>${sel("jobType",[["","Pick one"],...JOB_TYPES,...(j.jobType&&!JOB_TYPES.includes(j.jobType)?[j.jobType]:[])],j.jobType||"")}</div>`:""}
   </div>
   ${j.trade==="roofing"?`<div class="panel stack"><h3 class="sec">Adjuster</h3>
     <div class="grid2">
@@ -1616,6 +1619,7 @@ function quickAdd(){
         <div class="field"><label for="qa-source">Lead source</label><select class="input" id="qa-source"><option value="">Pick one</option>${sourceList().map(s=>`<option>${esc(s)}</option>`).join("")}</select>
           <input class="input" id="qa-other" placeholder="Type the source" hidden style="margin-top:6px"></div>
       </div>
+      ${S.trade==="other"?`<div class="field"><label for="qa-type">Job type</label><select class="input" id="qa-type"><option value="">Pick one</option>${JOB_TYPES.map(t=>`<option>${esc(t)}</option>`).join("")}</select></div>`:""}
       <div class="field"><label for="qa-face">Face note (shows on the card)</label><input class="input" id="qa-face" maxlength="120" placeholder="e.g. Hail damage, wants metal"></div>
       <div class="field"><label for="qa-note">Note (optional)</label><textarea class="input" id="qa-note" style="min-height:60px"></textarea></div>
       <div class="row"><button class="btn primary" type="submit">Add to Lead</button><button class="btn ghost" type="button" data-act="closeModal">Cancel</button></div>
@@ -1626,7 +1630,7 @@ function quickAdd(){
       const name=box.querySelector("#qa-name").value.trim(); if(!name) return;
       const partnerId = "";
       const now=Date.now(), note=box.querySelector("#qa-note").value.trim();
-      const j={id:rid(), trade:S.trade, stage:"Lead", stagesV2:true, faceNote:box.querySelector("#qa-face").value.trim(), name, phone:box.querySelector("#qa-phone").value.trim(), email:box.querySelector("#qa-email").value.trim(),
+      const j={id:rid(), trade:S.trade, stage:"Lead", stagesV2:true, jobType:box.querySelector("#qa-type")?.value||"", faceNote:box.querySelector("#qa-face").value.trim(), name, phone:box.querySelector("#qa-phone").value.trim(), email:box.querySelector("#qa-email").value.trim(),
         address:box.querySelector("#qa-address").value.trim(), source: box.querySelector("#qa-source").value, sourceOther: box.querySelector("#qa-source").value==="Other" ? box.querySelector("#qa-other").value.trim() : "",
         partnerId, splitPct:null, splitBasis:"", contract:null, carrier:"", claimNo:"", lost:false, lostReason:"", lostAt:null,
         createdAt:now, updatedAt:now, lastContact:null, closedAt:null, driveFolderId:null,
@@ -2254,6 +2258,9 @@ async function loadLive(){
   S.jobs=m; if(st.data && st.data.data) S.settings={...DEFAULT_SETTINGS, ...st.data.data};
   liveOk(); render();
   /* Other board renamed stages: old Complete -> In Progress, old Paid -> Complete */
+  /* Granite board folded into Retail ("other"): move any granite jobs over, keeping "Granite" as the job type */
+  const GR={"Lead":"Lead","Hot Lead":"Lead","Appointment":"Lead","Estimate Sent":"Estimate Sent","Follow-Up":"Estimate Sent","Won":"Won","Installed":"In Progress","Payment Needed":"Payment Needed","Paid":"Complete"};
+  for(const j of Object.values(S.jobs).filter(j=>j.trade==="granite")){ await mutateJob(j.id, x=>{ x.trade="other"; x.jobType=x.jobType||"Granite"; x.stage=GR[x.stage]||"Lead"; x.stagesV2=true; x.closedAt = x.stage===CLOSED.other ? (x.closedAt||Date.now()) : null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"system",text:"Moved from the Granite board to Retail"}); }); }
   const mig=Object.values(S.jobs).filter(j=>j.trade==="other" && !j.stagesV2);
   for(const j of mig){ await mutateJob(j.id, x=>{ if(x.stage==="Complete") x.stage="In Progress"; else if(x.stage==="Paid") x.stage="Complete"; x.closedAt = x.stage==="Complete" ? (x.closedAt||Date.now()) : null; x.stagesV2=true; }); }
   /* keep each job's partner tag in step with its lead source (controls what the partner can see) */
