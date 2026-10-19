@@ -317,7 +317,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Oct 18 · safety fixes";
+const APP_VERSION = "Oct 18 · offline + alarms";
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -504,23 +504,45 @@ function toast(msg){
 /* ---------- persistence (Supabase) ---------- */
 const row = j => ({id:j.id, trade:j.trade, stage:j.stage, lost:!!j.lost, partner_id:(partnerFor(j)||{}).id||null, data:j, updated_at:new Date().toISOString()});
 const chains = {};
+/* each job's updated_at as the database last had it. A save only lands if nobody changed the job since;
+   otherwise we pull the newer copy, re-apply this change on top, and try again (so two devices never wipe each other out). */
+const VER = {};
 function mutateJob(id, fn){
   chains[id] = (chains[id]||Promise.resolve()).then(async () => {
     const base = S.jobs[id]; if(!base) return;
-    const cur = structuredClone(base);
-    fn(cur); cur.updatedAt = Date.now();
-    S.jobs[id] = cur; renderSoon();
-    if(S.mode==="owner"){ const {error}=await sb.from("jobs").upsert(row(cur)); if(error) writeErr(error); return; }
-    /* a blocked update returns no error and no rows, so check that it actually landed */
-    const {data, error} = await sb.from("jobs").update(row(cur)).eq("id", id).select("id");
-    if(error) writeErr(error);
-    else if(!(data||[]).length){ S.jobs[id]=base; renderSoon(); toast("Didn't save: you don't have access to change this job"); }
+    if(S.offline){ toast("No signal. That change didn't save."); return; }
+    let src = base;
+    for(let tries=0; tries<4; tries++){
+      const cur = structuredClone(src);
+      fn(cur); cur.updatedAt = Date.now();
+      S.jobs[id] = cur; renderSoon();
+      let q = sb.from("jobs").update(row(cur)).eq("id", id);
+      if(VER[id]) q = q.eq("updated_at", VER[id]);
+      const {data, error} = await q.select("id,updated_at");
+      if(error){ writeErr(error); return; }
+      if((data||[]).length){ VER[id]=data[0].updated_at; return; }
+      /* nothing saved: changed on another device, deleted, or this login can't change it */
+      const {data:fresh, error:e2} = await sb.from("jobs").select("id,data,updated_at").eq("id", id).maybeSingle();
+      if(e2){ writeErr(e2); return; }
+      if(!fresh){
+        if(S.mode==="owner" && !VER[id]){ const {data:ins, error:e3}=await sb.from("jobs").insert(row(cur)).select("updated_at"); if(e3) writeErr(e3); else if(ins&&ins[0]) VER[id]=ins[0].updated_at; return; }
+        delete S.jobs[id]; delete VER[id]; renderSoon(); toast("That job was deleted on another device"); return;
+      }
+      if(VER[id] && fresh.updated_at===VER[id]){ S.jobs[id]=base; renderSoon(); toast("Didn't save: you don't have access to change this job"); return; }
+      VER[id]=fresh.updated_at; src={...fresh.data, id};
+    }
+    toast("Couldn't save. This job keeps changing on another device. Try again.");
   }).catch(e=>writeErr(e));
   return chains[id];
 }
 async function createJob(j){
+  if(S.offline){ toast("No signal. That lead didn't save."); return; }
   S.jobs[j.id]=j; renderSoon();
-  const {error} = await sb.from("jobs").insert(row(j)); if(error) writeErr(error);
+  const {data, error} = await sb.from("jobs").insert(row(j)).select("updated_at"); if(error) writeErr(error); else if(data&&data[0]) VER[j.id]=data[0].updated_at;
+}
+/* fix only the partner tag; never rewrite the whole job (that could undo someone's edit) */
+async function retagJobs(jobs){
+  for(const j of jobs){ const {error}=await sb.from("jobs").update({partner_id:(partnerFor(j)||{}).id||null}).eq("id", j.id); if(error) console.warn("retag", error.message); }
 }
 async function deleteJobDoc(id){
   const j = S.jobs[id]; delete S.jobs[id]; renderSoon();
@@ -533,6 +555,7 @@ async function deleteJobDoc(id){
 let settingsChain = Promise.resolve();
 function saveSettings(patch){
   settingsChain = settingsChain.then(async () => {
+    if(S.offline){ toast("No signal. That change didn't save."); return; }
     S.settings = {...S.settings, ...patch}; renderSoon();
     const {error} = await sb.from("settings").upsert({id:1, data:S.settings, updated_at:new Date().toISOString()}); if(error) writeErr(error);
   });
@@ -544,8 +567,6 @@ function writeErr(e){
   S.dbOk = navigator.onLine ? S.dbOk : false; renderSoon();
   toast(navigator.onLine ? "Couldn't save that change. Try again." : "No signal. That change didn't save.");
 }
-/* Drive filing is paused in the standalone app; files live in the app's own storage. */
-async function fileToDrive(){}
 /* ---------- images / files ---------- */
 /* paperwork cleanup: stretch contrast (lifts haze, darkens ink) and sharpen text edges */
 function enhancePaper(g, w, h){
@@ -684,6 +705,7 @@ function wirePhotoPicker(box, pfx, onPhoto){
 }
 const ASSET_TYPES = ["image/png","image/jpeg","image/gif","image/webp","application/pdf"];
 async function storeAsset(blob, type, jobId){
+  if(S.offline) throw new Error("No signal");
   const ext = type==="application/pdf" ? "pdf" : type==="image/png" ? "png" : type==="image/webp" ? "webp" : type==="image/gif" ? "gif" : "jpg";
   const path = `${jobId}/${rid()}.${ext}`;
   const {error} = await sb.storage.from(BUCKET).upload(path, blob, {contentType:type, upsert:false});
@@ -749,13 +771,15 @@ const ICON = {
 };
 
 function render(){
-  if(!session){ renderLogin(); return; }
+  if(!session && !S.offline){ renderLogin(); return; }
+  saveCacheSoon();
   if(S.mode==="partner" || S.mode==="none"){ renderPartner(); return; }
   $("#nav").hidden=false;
   renderTop(); renderNav(); renderMain(); renderSheet();
-  $("#fab").hidden = S.view!=="board" || !!S.openJob || !can("addLeads");
+  $("#fab").hidden = S.view!=="board" || !!S.openJob || !can("addLeads") || !!S.offline;
 }
 function syncBadge(){
+  if(S.offline) return '<span class="dot bad"></span>Offline copy';
   if(S.dbOk===null) return '<span class="dot"></span>Connecting';
   if(S.dbOk) return '<span class="dot ok"></span>Saved';
   return '<span class="dot bad"></span>Not saving';
@@ -775,7 +799,8 @@ function renderNav(){
 function renderMain(){
   const m=$("#main");
   let banner="";
-  if(S.dbOk===false) banner = S.dbErr
+  if(S.offline) banner = `<div class="banner"><b>No signal.</b> Showing your saved copy from ${esc(fdt(S.offline))}. Changes can't be saved until you're back online.</div>`;
+  else if(S.dbOk===false) banner = S.dbErr
     ? `<div class="banner"><b>Can't reach your database.</b> Send this message to Claude: <span style="user-select:text">${esc(S.dbErr)}</span></div>`
     : `<div class="banner">You're offline or the connection dropped. Changes may not save until you have signal again.</div>`;
   if(S.view==="board") m.innerHTML = banner + boardView();
@@ -786,7 +811,7 @@ function renderMain(){
 }
 
 /* ----- reminders: tied to a job, alarm on your phone at the time ----- */
-const myEmail = () => String(session?.user?.email||"").toLowerCase();
+const myEmail = () => String(session?.user?.email||S.cacheEmail||"").toLowerCase();
 const endOfToday = () => { const d=new Date(); d.setHours(23,59,59,999); return d.getTime(); };
 function myReminders(){
   const out=[]; Object.values(S.jobs).forEach(j=>(j.reminders||[]).forEach(r=>{ if(!r.by || r.by===myEmail()) out.push({...r, jobId:j.id, jobName:j.name, phone:j.phone, address:j.address}); }));
@@ -1024,7 +1049,7 @@ function renderLogin(){
   if($("#login")) return;
   $("#main").innerHTML = `<form id="login" class="panel stack" style="max-width:420px;margin:24px auto">
     <h3 class="sec">Sign in</h3>
-    <div class="field"><label for="li-email">Email</label><input class="input" id="li-email" type="email" autocomplete="username" value="redhammer.exteriors@gmail.com" required></div>
+    <div class="field"><label for="li-email">Email</label><input class="input" id="li-email" type="email" autocomplete="username" required></div>
     <div class="field"><label for="li-pass">Password</label><input class="input" id="li-pass" type="password" autocomplete="current-password" required></div>
     <button class="btn primary block" type="submit" id="li-go">Sign in</button>
     <p class="small muted" id="li-msg" style="margin:0">You stay signed in on this device.</p>
@@ -1457,11 +1482,6 @@ function jobInfo(j){
   <p class="small muted" style="margin:0">Added ${fdate(j.createdAt)}</p>`;
 }
 function driveTag(){ return ""; }
-function driveTagOld(it){
-  if(!it.drive) return `<span class="tag">Filing to Drive…</span>`;
-  if(it.drive.status==="ok") return it.drive.url?`<a class="tag ok" href="${esc(it.drive.url)}" target="_blank" rel="noopener">In Drive</a>`:`<span class="tag ok">In Drive</span>`;
-  return `<button class="tag bad" style="border:0" data-act="retryDrive" data-list="${esc(it._list)}" data-item="${esc(it.id)}" title="${esc(it.drive.err||"")}">Drive failed · retry</button>`;
-}
 function jobMoney(j,c){
   const ex = [...(j.expenses||[])].sort((a,b)=>(b.date||0)-(a.date||0));
   const pay = [...(j.payments||[])].sort((a,b)=>(b.date||0)-(a.date||0));
@@ -1506,7 +1526,7 @@ function jobMoney(j,c){
     ${can("payments")?`<button class="btn block" data-act="addPayment">+ Record payment</button>`:""}
     ${pay.length?`<div class="list">${pay.map(p=>`<div class="li">
       <div class="grow"><div class="t num">${ORD[[...(j.payments||[])].sort((a,b)=>(a.date||0)-(b.date||0)).findIndex(x=>x.id===p.id)]||""} payment · ${money(n(p.amount),1)} · ${esc(p.method)}</div><div class="s">${fdate(p.date)}${p.receiptNo?" · Receipt "+esc(p.receiptNo):""}${p.note?" · "+esc(p.note):""}</div>
-      <div class="row" style="margin-top:6px;gap:6px">${p.assetId?`<a class="btn small" href="${urlFor(p.assetId)||"#"}" target="_blank" rel="noopener">View receipt</a><button class="btn small primary" data-act="dlReceipt" data-item="${esc(p.id)}">Send / save</button>`:""}<button class="btn small" data-act="addPayPhoto" data-item="${esc(p.id)}">+ Photo</button></div>
+      <div class="row" style="margin-top:6px;gap:6px"><button class="btn small" data-act="addPayPhoto" data-item="${esc(p.id)}">+ Photo</button></div>
       ${(p.photos||[]).length?`<div class="thumbs">${p.photos.map(ph=>`<a href="${urlFor(ph)||"#"}" target="_blank" rel="noopener"><img class="thumb" src="${urlFor(ph)||PIXEL}" alt="Check or payment photo"></a>`).join("")}</div>`:""}</div>
       ${S.isOwner?`<button class="btn small ghost danger" data-act="delItem" data-list="payments" data-item="${esc(p.id)}" aria-label="Delete payment">✕</button>`:""}
     </div>`).join("")}</div>`:""}
@@ -1663,7 +1683,6 @@ function addExpense(){
       }
       await mutateJob(jobId, x=>{ x.expenses=x.expenses||[]; x.expenses.push(item); });
       closeModal(); toast("Expense added");
-      if(item.assetId) fileToDrive(jobId, "expenses", item.id, photo, `Receipt ${new Date(item.date).toISOString().slice(0,10)} ${item.category} $${amt.toFixed(2)}.jpg`, "image/jpeg");
     });
   });
 }
@@ -1883,7 +1902,7 @@ function editPartner(id){
       saveSettings({partners:list}).then(async ()=>{
         if(p.email && p.email!==email) await sb.from("partner_accounts").delete().eq("email", String(p.email).toLowerCase());
         await syncPartnerAccounts();
-        const fix=Object.values(S.jobs).filter(j=>(partnerFor(j)||{}).id===np.id); if(fix.length) await sb.from("jobs").upsert(fix.map(row));
+        const fix=Object.values(S.jobs).filter(j=>(partnerFor(j)||{}).id===np.id); if(fix.length) await retagJobs(fix);
       });
       closeModal(); toast("Partner saved");
     });
@@ -1893,7 +1912,7 @@ function editPartner(id){
         if(p.email) await sb.from("partner_accounts").delete().eq("email", String(p.email).toLowerCase());
         await sb.from("partner_accounts").delete().eq("partner_id", p.id);
         const was=String(p.name).trim().toLowerCase(), fix=Object.values(S.jobs).filter(j=>String(srcLabel(j)).trim().toLowerCase()===was);
-        if(fix.length) await sb.from("jobs").upsert(fix.map(row));
+        if(fix.length) await retagJobs(fix);
       });
       closeModal(); toast("Partner removed");
     });
@@ -1995,7 +2014,7 @@ const ACT = {
     mutateJob(id, x=>{ x.attnAck=Math.max(x.attnAck||0,l); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"system",text:`Marked handled at ${ageDays(x)} days old`}); }); toast("Cleared until "+(l<60?(l===15?"30":"60")+" days":"it closes")); },
   reopen:b=>{
     const id=b.dataset.id;
-    mutateJob(id, x=>{ x.lost=false; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Reopened from Lost Leads"}); x.lastContact=Date.now(); });
+    mutateJob(id, x=>{ x.lost=false; x.lostReason=""; x.lostAt=null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Reopened from Lost Leads"}); x.lastContact=Date.now(); });
     toast("Back on the "+tradeName(S.jobs[id]?.trade)+" board");
   },
   addNote:()=>{
@@ -2015,17 +2034,6 @@ const ACT = {
       toast("Deleted");
     });
   },
-  deleteJob:()=>{
-    const id=S.openJob, j=S.jobs[id];
-    confirmBox("Delete "+(j.name||"this job")+"?", "This removes the job, its notes, expenses and payments from the CRM. Files already in Google Drive stay there. If you might call them back, use Mark as lost instead.", "Delete job", ()=>{
-      S.openJob=null; deleteJobDoc(id); toast("Job deleted");
-    });
-  },
-  dlReceipt:async b=>{
-    const j=S.jobs[S.openJob], p=(j.payments||[]).find(x=>x.id===b.dataset.item); if(!p||!p.assetId) return;
-    try{ const blob=await fileBlob(p.assetId); await shareOrSave(blob, `${p.receiptNo} ${j.name}.pdf`, `Receipt ${p.receiptNo}`); }
-    catch(e){ toast("Couldn't load the receipt. Check your signal."); }
-  },
   editPartner:b=>editPartner(b.dataset.id),
   signOut:async()=>{ await sb.auth.signOut(); },
   testAlarm:async()=>{ const ok=await pushAlert(S.settings.notifyTopic,{title:"Red Hammer CRM test alarm", message:"Alarms are working. You'll get one 1 hour before each appointment.", priority:5, tags:"alarm_clock"}); toast(ok?"Test alarm sent. Check your phone.":"Couldn't reach the alarm service. Check your signal."); },
@@ -2039,6 +2047,7 @@ document.addEventListener("click", e=>{
   const a=e.target.closest("[data-act]"); if(!a) return;
   const need=NEED[a.dataset.act];
   if(need && !(need==="owner" ? S.mode==="owner" : can(need))){ e.preventDefault(); toast("You don't have access to that"); return; }
+  if(S.offline && !VIEW_ONLY.has(a.dataset.act)){ e.preventDefault(); toast("No signal. You can look, but changes have to wait until you're back online."); return; }
   if(a.dataset.act==="modalBg" && e.target!==a) return;
   const fn=ACT[a.dataset.act]; if(!fn) return;
   if(a.tagName!=="A") e.preventDefault();
@@ -2046,9 +2055,13 @@ document.addEventListener("click", e=>{
 });
 
 /* field edits on the job sheet */
+/* what still works with no signal: looking around, calling, texting, copying */
+const VIEW_ONLY = new Set(["trade","view","open","close","jtab","period","pfReset","closeModal","modalBg","copy","callStart","emailStart","ptab","forceUpdate","backupCsv"]);
 document.addEventListener("change", e=>{
   const el=e.target;
   if(el.id==="pf-from"||el.id==="pf-to"){ if(!el.value) return; if(el.id==="pf-from") S.pFrom=el.value; else S.pTo=el.value; render(); return; }
+  if(el.id==="srcYear"||el.id==="srcFilter"||el.id==="sp-year"||el.id==="sp-from"||el.id==="sp-to"){ /* view filters, handled below or in their modal */ }
+  else if(S.offline){ toast("No signal. That change didn't save."); render(); return; }
   if(el.id==="docInput"){ uploadDoc(el); return; }
   if(el.id==="estInput"){ uploadDoc(el, "Estimate"); return; }
   if(el.dataset.esttotal && S.openJob){ const did=el.dataset.esttotal, v=el.value===""?null:n(el.value); mutateJob(S.openJob, x=>{ const d=(x.docs||[]).find(y=>y.id===did); if(d) d.total=v; }); return; }
@@ -2096,7 +2109,6 @@ async function uploadOneDoc(f, category){
   try{ item.assetId = await storeAsset(blob, type, id); }catch(e){ toast(assetErr(e)); return; }
   await mutateJob(id, x=>{ x.docs=x.docs||[]; x.docs.push(item); });
   toast(`Saved ${item.name}`);
-  fileToDrive(id, "docs", item.id, blob, item.name, type);
 }
 
 /* drag files onto the Files tab */
@@ -2180,45 +2192,72 @@ async function syncPartnerAccounts(){
 
 /* ---------- boot ---------- */
 let channel=null;
-async function loadAll(){
-  if(!S.mode){
+/* saved copy on this device, so the app still opens and shows jobs with no signal (view only) */
+const CACHE_KEY = "rh-cache";
+let cacheTimer = null;
+function saveCacheSoon(){
+  if(cacheTimer || S.offline || !S.ready || !session || !S.mode || S.mode==="none") return;
+  cacheTimer = setTimeout(()=>{ cacheTimer=null; if(S.offline || !session) return;
+    try{ localStorage.setItem(CACHE_KEY, JSON.stringify({email:myEmail(), mode:S.mode, me:S.me, jobs:S.jobs, settings:S.settings, at:Date.now()})); }catch(e){} }, 1500);
+}
+function useCache(anyEmail){
+  let c=null; try{ c=JSON.parse(localStorage.getItem(CACHE_KEY)||"null"); }catch(e){}
+  if(!c || !c.mode || (!anyEmail && c.email!==myEmail())) return false;
+  S.mode=c.mode; S.me=c.me; S.isOwner=c.mode==="owner"; S.jobs=c.jobs||{}; S.settings={...DEFAULT_SETTINGS, ...(c.settings||{})};
+  S.offline=c.at||Date.now(); S.cacheEmail=c.email; S.ready=true; S.dbOk=false; S.dbErr=""; render(); return true;
+}
+let loading=null;
+function loadAll(){
+  if(loading) return loading;
+  if(!navigator.onLine && useCache()) return Promise.resolve();
+  /* weak signal: show the saved copy after a few seconds, and swap in live data when it arrives */
+  const slow = setTimeout(()=>{ if(!S.ready || S.offline) useCache(); }, 6000);
+  loading = loadLive().catch(e=>{ console.error(e); if(!useCache()){ S.dbOk=false; S.dbErr=String(e&&e.message||e); S.ready=true; render(); } })
+    .finally(()=>{ clearTimeout(slow); loading=null; });
+  return loading;
+}
+const liveOk = () => { S.offline=false; S.ready=true; S.dbOk=true; S.dbErr=""; };
+const takeJobs = rows => { const m={}; (rows||[]).forEach(r=>{ m[r.id]={...r.data, id:r.id}; VER[r.id]=r.updated_at; }); return m; };
+async function loadLive(){
+  if(!S.mode || S.offline){
     const email=String(session?.user?.email||"").toLowerCase();
     if(email===OWNER_EMAIL) S.mode="owner";
     else{
-      const {data}=await sb.from("partner_accounts").select("*").eq("email", email).maybeSingle();
+      const {data, error:pe}=await sb.from("partner_accounts").select("*").eq("email", email).maybeSingle();
+      if(pe) throw pe;
       if(data){ S.mode="partner"; S.me=data; S.isOwner=false; S.settings={...DEFAULT_SETTINGS, partners:[{id:data.partner_id, name:data.name||"Partner", pct:n(data.pct), basis:data.basis||"profit"}]}; }
       else{
-        const {data:emp}=await sb.from("employees").select("*").eq("email", email).maybeSingle();
+        const {data:emp, error:ee}=await sb.from("employees").select("*").eq("email", email).maybeSingle();
+        if(ee) throw ee;
         if(emp && emp.active){ S.mode="employee"; S.me=emp; S.isOwner=false; S.me.perms=emp.perms||{}; }
         else S.mode="none";
       }
     }
   }
-  if(S.mode==="none"){ S.ready=true; render(); return; }
+  if(S.mode==="none"){ liveOk(); try{ localStorage.removeItem(CACHE_KEY); }catch(e){} render(); return; }
   if(S.mode==="employee"){
-    const [jr, st] = await Promise.all([ sb.from("jobs").select("id,data"), sb.from("settings").select("data").eq("id",1).maybeSingle() ]);
-    if(jr.error){ S.dbOk=false; S.dbErr=jr.error.message; S.ready=true; render(); return; }
-    const m={}; (jr.data||[]).forEach(r=>{ m[r.id]={...r.data, id:r.id}; }); S.jobs=m;
+    const [jr, st] = await Promise.all([ sb.from("jobs").select("id,data,updated_at"), sb.from("settings").select("data").eq("id",1).maybeSingle() ]);
+    if(jr.error) throw jr.error;
+    S.jobs=takeJobs(jr.data);
     if(st.data && st.data.data) S.settings={...DEFAULT_SETTINGS, ...st.data.data};
     if(!myTrades().some(([k])=>k===S.trade) && myTrades().length) S.trade=myTrades()[0][0];
-    S.ready=true; S.dbOk=true; S.dbErr=""; render(); sweepReminders(); return;
+    liveOk(); render(); sweepReminders(); return;
   }
   if(S.mode==="partner"){
-    const jr = await sb.from("jobs").select("id,data").eq("partner_id", S.me.partner_id);
-    if(jr.error){ S.dbOk=false; S.dbErr=jr.error.message; S.ready=true; render(); return; }
-    const m={}; (jr.data||[]).forEach(r=>{ m[r.id]={...r.data, id:r.id}; }); S.jobs=m; S.ready=true; S.dbOk=true; S.dbErr=""; render(); return;
+    const jr = await sb.from("jobs").select("id,data,updated_at").eq("partner_id", S.me.partner_id);
+    if(jr.error) throw jr.error;
+    S.jobs=takeJobs(jr.data); liveOk(); render(); return;
   }
-  const [jr, st] = await Promise.all([ sb.from("jobs").select("id,data,partner_id"), sb.from("settings").select("data").eq("id",1).maybeSingle() ]);
-  if(jr.error){ S.dbOk=false; S.dbErr=jr.error.message||String(jr.error.code||"unknown"); S.ready=true; render(); return; }
-  S.dbErr="";
-  const m={}, fix=[]; (jr.data||[]).forEach(r=>{ const j={...r.data, id:r.id}; m[r.id]=j; if(((partnerFor(j)||{}).id||null)!==(r.partner_id||null)) fix.push(j); });
+  const [jr, st] = await Promise.all([ sb.from("jobs").select("id,data,partner_id,updated_at"), sb.from("settings").select("data").eq("id",1).maybeSingle() ]);
+  if(jr.error) throw jr.error;
+  const m=takeJobs(jr.data), fix=(jr.data||[]).filter(r=>((partnerFor(m[r.id])||{}).id||null)!==(r.partner_id||null)).map(r=>m[r.id]);
   S.jobs=m; if(st.data && st.data.data) S.settings={...DEFAULT_SETTINGS, ...st.data.data};
-  S.ready=true; S.dbOk=true; render();
+  liveOk(); render();
   /* Other board renamed stages: old Complete -> In Progress, old Paid -> Complete */
   const mig=Object.values(S.jobs).filter(j=>j.trade==="other" && !j.stagesV2);
   for(const j of mig){ await mutateJob(j.id, x=>{ if(x.stage==="Complete") x.stage="In Progress"; else if(x.stage==="Paid") x.stage="Complete"; x.closedAt = x.stage==="Complete" ? (x.closedAt||Date.now()) : null; x.stagesV2=true; }); }
   /* keep each job's partner tag in step with its lead source (controls what the partner can see) */
-  if(fix.length) await sb.from("jobs").upsert(fix.map(row));
+  if(fix.length) await retagJobs(fix);
   /* two alert topics: a private one for Gabriel, and a partner one that partner logins can read (only their own bookings go there).
      Older setups shared one topic with partners; keep that one for partners and give Gabriel a fresh private one. */
   const newTopic = () => "rh-"+Array.from(crypto.getRandomValues(new Uint8Array(12)),b=>b.toString(36).padStart(2,"0")).join("").slice(0,20);
@@ -2230,8 +2269,8 @@ function subscribe(){
   if(channel) sb.removeChannel(channel);
   channel = sb.channel("crm")
     .on("postgres_changes", {event:"*", schema:"public", table:"jobs"}, p=>{
-      if(p.eventType==="DELETE"){ delete S.jobs[p.old.id]; }
-      else if(p.new && p.new.data){ S.jobs[p.new.id]={...p.new.data, id:p.new.id};
+      if(p.eventType==="DELETE"){ delete S.jobs[p.old.id]; delete VER[p.old.id]; }
+      else if(p.new && p.new.data){ S.jobs[p.new.id]={...p.new.data, id:p.new.id}; if(p.new.updated_at) VER[p.new.id]=p.new.updated_at;
         if(S.mode==="owner" && p.eventType==="INSERT" && p.new.data.submittedBy){ toast(`New appointment from ${p.new.data.submittedBy}: ${p.new.data.name||""}`); sweepAlarms(); } }
       renderSoon();
     })
@@ -2241,9 +2280,12 @@ function subscribe(){
 sb.auth.onAuthStateChange((ev, sess)=>{
   const was = !!session; session = sess; S.authReady=true;
   if(sess && !was){ S.ready=false; render(); setTimeout(()=>{ loadAll(); subscribe(); }, 0); }
-  if(!sess){ S.jobs={}; S.ready=false; S.openJob=null; S.employees=null; S.mode=""; S.me=null; S.ptab="new"; S.isOwner=true; S.settings={...DEFAULT_SETTINGS}; if(channel){ sb.removeChannel(channel); channel=null; } render(); }
+  /* login can't be refreshed with no signal: keep showing the saved copy instead of the sign-in screen */
+  if(!sess && ev!=="SIGNED_OUT" && !navigator.onLine && useCache(true)) return;
+  if(!sess && ev==="SIGNED_OUT"){ try{ localStorage.removeItem(CACHE_KEY); }catch(e){} }
+  if(!sess){ S.offline=false; S.jobs={}; S.ready=false; S.openJob=null; S.employees=null; S.mode=""; S.me=null; S.ptab="new"; S.isOwner=true; S.settings={...DEFAULT_SETTINGS}; if(channel){ sb.removeChannel(channel); channel=null; } render(); }
 });
-window.addEventListener("online", ()=>{ if(session){ S.dbOk=true; loadAll(); } });
+window.addEventListener("online", ()=>{ if(session){ S.dbOk=true; loadAll(); } else if(S.offline) location.reload(); });
 window.addEventListener("offline", ()=>{ S.dbOk=false; renderSoon(); });
 document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible"){ if(session) loadAll(); checkUpdate(); } });
 /* tell the user when a newer version of the app is online */
@@ -2260,6 +2302,8 @@ async function checkUpdate(){
   }catch(e){}
 }
 setTimeout(checkUpdate, 3000); setInterval(checkUpdate, 10*60e3);
+/* keep a copy of the app on the device so it opens with no signal */
+try{ if("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(()=>{}); }catch(e){}
 render();
 })();
 </script>
