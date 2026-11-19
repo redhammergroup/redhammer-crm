@@ -104,6 +104,10 @@ main{padding:14px 16px calc(90px + env(safe-area-inset-bottom,0px))}
 .colghost{position:fixed;z-index:80;pointer-events:none;background:var(--surface);border:2px solid var(--red);border-radius:8px;padding:6px 10px;font-family:var(--f-display);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:14px;box-shadow:var(--shadow);transform:translate(-50%,-120%)}
 .col.addcol{min-height:64px;align-items:center;justify-content:center;border:2px dashed var(--line);background:none;color:var(--muted);font-family:var(--f-display);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:14px;cursor:pointer}
 .col.addcol:hover{color:var(--ink);border-color:var(--muted)}
+.colhead h2.renamable{cursor:text;border-radius:6px;padding:2px 4px;margin:-2px -4px}
+.colhead h2.renamable:hover{background:var(--line)}
+.colhead h2 .pen{font-size:12px;margin-left:5px;color:var(--muted);opacity:.55}
+.colhead h2.renamable:hover .pen{opacity:1}
 .pipebar{display:flex;align-items:center;gap:10px;margin:0 0 10px}
 .pipebar label{font-family:var(--f-display);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:13px;color:var(--muted)}
 .pipebar select{flex:1;max-width:340px}
@@ -346,7 +350,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Nov 19 · Salesman pipelines";
+const APP_VERSION = "Nov 19 · Tap a column name to rename it";
 /* per-column sort, chosen with the funnel button on each column; remembered on this device */
 const COL_SORTS = [["","Default (needs attention first)"],["newest","Newest first"],["oldest","Oldest first"],["contact","Last contacted"],["name","Name A to Z"],["amount","Biggest contract"],["appt","Soonest appointment"]];
 const colSortFns = {
@@ -1428,7 +1432,7 @@ function boardCols(){
     const list = jobs.filter(j=>j.stage===st).sort(colSortFns[sk] || (st==="Appointment" ? colSortFns.appt : (a,b)=>attnSort(a,b) || ((b.lastContact||b.createdAt)-(a.lastContact||a.createdAt))));
     const sum = list.reduce((a,j)=>a+n(j.contract),0);
     return `<section class="col${st==="Payment Needed"?" paycol":""}${st==="Hot Lead"?" hotcol":""}" data-stage="${esc(st)}" aria-label="${esc(stageLabel(S.trade,st))}">
-      <div class="colhead"><span class="colgrip" title="Drag to move this column" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14"><g fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></g></svg></span><h2>${st==="Hot Lead"?"🔥 ":""}${esc(stageLabel(S.trade,st))}</h2><span class="ct">${list.length}</span>${sum&&can("money")?`<span class="sum num">${money(sum)}</span>`:""}
+      <div class="colhead"><span class="colgrip" title="Drag to move this column" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14"><g fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></g></svg></span><h2${S.mode==="owner"?` class="renamable" data-act="renameCol" data-v="${esc(st)}" title="Tap to rename"`:""}>${st==="Hot Lead"?"🔥 ":""}${esc(stageLabel(S.trade,st))}${S.mode==="owner"?`<span class="pen" aria-hidden="true">✎</span>`:""}</h2><span class="ct">${list.length}</span>${sum&&can("money")?`<span class="sum num">${money(sum)}</span>`:""}
         <button class="colsort${sk?" on":""}" data-act="colSort" data-v="${esc(st)}" aria-label="Sort or edit ${esc(stageLabel(S.trade,st))}${sk?": "+esc((COL_SORTS.find(x=>x[0]===sk)||[])[1]||""):""}" title="Sort or edit this column"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z" fill="${sk?"currentColor":"none"}" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button></div>
       ${list.map(cardHTML).join("") || (st==="Lead" && !jobs.length ? `<div class="empty-col">No ${tradeName(S.trade).toLowerCase()} leads yet. Tap + to add your first one.</div>` : `<div class="empty-col">Nothing here</div>`)}
     </section>`;
@@ -2283,6 +2287,7 @@ const ACT = {
     toast(owner?"Request denied. The lead stays.":"Request cancelled"); },
   scanContract:()=>scanContract(),
   colSort:b=>colSort(b.dataset.v),
+  renameCol:b=>renameColumn(S.trade, b.dataset.v),
   addColumn:()=>addColumn(S.trade, null),
   editEmployee:b=>editEmployee(b.dataset.id),
   testMyAlarm:async()=>{ const ok=await pushAlert(myTopic(),{title:"Red Hammer CRM test alarm", message:"Reminder alarms are working.", priority:5, tags:"alarm_clock"}); toast(ok?"Test alarm sent":"Couldn't reach the alarm service"); },
@@ -2384,7 +2389,7 @@ const ACT = {
   ptab:b=>{ S.ptab=b.dataset.v; S.openJob=null; render(); window.scrollTo(0,0); },
   forceUpdate:()=>location.replace(location.pathname+"?v="+Date.now()),
 };
-const NEED = {addColumn:"owner", approveDel:"owner", denyDel:"edit", stage:"edit", nextStage:"edit", convertBoard:"edit", scanContract:"files", toggleSigned:"edit", toggleBuilt:"edit", setPath:"edit", ackAttn:"edit", addNote:"edit", logCall:"edit", logEmail:"edit",
+const NEED = {addColumn:"owner", renameCol:"owner", approveDel:"owner", denyDel:"edit", stage:"edit", nextStage:"edit", convertBoard:"edit", scanContract:"files", toggleSigned:"edit", toggleBuilt:"edit", setPath:"edit", ackAttn:"edit", addNote:"edit", logCall:"edit", logEmail:"edit",
   reopen:"edit", addPayPhoto:"payments", addPayment:"payments", makeReceipt:"payments", addExpense:"expenses", estToContract:"money", addPayout:"owner", editPartner:"owner",
   backupJson:"owner", backupCsv:"owner", testAlarm:"owner", editEmployee:"owner", editContact:"owner", subProfile:"owner", quickAdd:"addLeads"};
 document.addEventListener("click", e=>{
