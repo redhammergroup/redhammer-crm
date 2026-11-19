@@ -85,6 +85,17 @@ main{padding:14px 16px calc(90px + env(safe-area-inset-bottom,0px))}
 .colhead h2{font-family:var(--f-display);font-weight:700;font-size:15px;letter-spacing:.08em;text-transform:uppercase;margin:0}
 .colhead .ct{font-size:13px;color:var(--muted)}
 .colhead .sum{margin-left:auto;font-size:13px;color:var(--muted)}
+.colhead{align-items:center}
+.colsort{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:1px solid transparent;border-radius:8px;background:none;color:var(--muted);padding:0;cursor:pointer}
+.colhead .sum ~ .colsort{margin-left:2px}
+.colsort:hover{border-color:var(--line);color:var(--ink)}
+.colsort.on{color:var(--red);border-color:var(--red-tint);background:var(--red-tint)}
+.col.hotcol .colhead h2,.col.hotcol .colhead .ct{color:var(--a30)}
+.scanpages{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px}
+.scanpages figure{margin:0;position:relative;background:var(--sunk);border-radius:8px;overflow:hidden;aspect-ratio:3/4}
+.scanpages img{width:100%;height:100%;object-fit:cover;display:block}
+.scanpages figcaption{position:absolute;left:4px;top:4px;background:rgba(0,0,0,.6);color:#fff;font-size:12px;border-radius:6px;padding:1px 6px}
+.scanpages button{position:absolute;right:4px;top:4px;width:26px;height:26px;border-radius:99px;border:0;background:rgba(0,0,0,.6);color:#fff;font-size:14px;line-height:1;cursor:pointer}
 .empty-col{font-size:13px;color:var(--muted);padding:10px 6px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 12px;box-shadow:var(--shadow);cursor:pointer;display:grid;gap:4px;text-align:left;width:100%}
 .card:hover{border-color:var(--muted)}
@@ -286,9 +297,9 @@ textarea.input{min-height:80px;resize:vertical}
 "use strict";
 /* ---------- constants ---------- */
 const STAGES = {
-  roofing: ["Appointment","Lead","Inspected","Claim Filed","Adjuster Meeting Complete","Denied","Approved","Built","Supplement","Payment Needed","Complete"],
+  roofing: ["Appointment","Lead","Hot Lead","Inspected","Claim Filed","Adjuster Meeting Complete","Denied","Approved","Built","Supplement","Payment Needed","Complete"],
   granite: ["Lead","Hot Lead","Appointment","Estimate Sent","Follow-Up","Won","Installed","Payment Needed","Paid"],
-  other:   ["Lead","Estimate Sent","Won","In Progress","Payment Needed","Complete"]
+  other:   ["Lead","Hot Lead","Estimate Sent","Won","In Progress","Payment Needed","Complete"]
 };
 const CLOSED = {roofing:"Complete", granite:"Paid", other:"Complete"};
 const TRADES = [["roofing","Roofing"],["other","Retail"]]; /* "granite" board was folded into Retail; its stages stay in STAGES for old jobs */
@@ -318,7 +329,17 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Oct 18 · Roofing + Retail";
+const APP_VERSION = "Nov 18 · Hot Lead, sorting, convert, contract scan";
+/* per-column sort, chosen with the funnel button on each column; remembered on this device */
+const COL_SORTS = [["","Default (needs attention first)"],["newest","Newest first"],["oldest","Oldest first"],["contact","Last contacted"],["name","Name A to Z"],["amount","Biggest contract"],["appt","Soonest appointment"]];
+const colSortFns = {
+  newest:(a,b)=>(b.createdAt||0)-(a.createdAt||0),
+  oldest:(a,b)=>(a.createdAt||0)-(b.createdAt||0),
+  contact:(a,b)=>(b.lastContact||b.createdAt||0)-(a.lastContact||a.createdAt||0),
+  name:(a,b)=>String(a.name||"").localeCompare(String(b.name||"")),
+  amount:(a,b)=>n(b.contract)-n(a.contract),
+  appt:(a,b)=>(a.appointmentAt||9e15)-(b.appointmentAt||9e15)
+};
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
 /* ---------- state ---------- */
@@ -330,6 +351,7 @@ const S = {
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {auth:{persistSession:true, autoRefreshToken:true}});
 let session=null;
 try{ const t=localStorage.getItem("rh-trade"); if(t && TRADES.some(x=>x[0]===t)) S.trade=t; }catch(e){}
+S.colSort={}; try{ S.colSort=JSON.parse(localStorage.getItem("rh-colsort")||"{}")||{}; }catch(e){}
 
 /* ---------- helpers ---------- */
 const $ = s => document.querySelector(s);
@@ -632,7 +654,7 @@ async function tuneTrack(track){
     if(adv.length) await track.applyConstraints({advanced:adv});
   }catch(e){}
 }
-function openCamera(){
+function openCamera(hint){
   return new Promise(async resolve=>{
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ resolve(undefined); return; }
     let stream, cams=[], camIdx=0;
@@ -646,7 +668,7 @@ function openCamera(){
       camIdx = Math.max(0, cams.findIndex(c=>c.deviceId===stream.getVideoTracks()[0].getSettings().deviceId));
     }catch(e){ window.__camErr = (e && (e.name+": "+e.message)) || "unknown"; resolve(e && e.name==="NotAllowedError" ? "denied" : undefined); return; }
     const el=document.createElement("div"); el.className="cam";
-    el.innerHTML=`<video playsinline autoplay muted></video><div class="camhint">Hold steady, fill the screen with the receipt</div>
+    el.innerHTML=`<video playsinline autoplay muted></video><div class="camhint">${esc(hint||"Hold steady, fill the screen with the receipt")}</div>
       <div class="camctl"><button type="button" class="btn" data-c="x">Cancel</button><button type="button" class="shutter" data-c="snap" aria-label="Take photo"></button>
       ${cams.length>1?`<button type="button" class="btn" data-c="lens">Switch lens</button>`:`<span style="width:84px"></span>`}</div>`;
     document.body.appendChild(el);
@@ -702,6 +724,132 @@ function wirePhotoPicker(box, pfx, onPhoto){
     const why = window.__camErr ? ` (${window.__camErr})` : "";
     if(r==="denied"){ msg.textContent="Camera is blocked. In Chrome tap ⋮ → Settings → Site settings → Camera and allow this site, or use Upload from gallery."+why; return; }
     msg.textContent="The camera couldn't start. Close other apps and try again, or use Upload from gallery."+why;
+  });
+}
+/* contract scanning: each page photo is cleaned up like paperwork, shrunk (black & white by default),
+   then all pages go into one letter-size PDF, usually well under 1 MB */
+async function scanPage(file, gray){
+  const bmp = await createImageBitmap(file);
+  const max = 1700, sc = Math.min(1, max/Math.max(bmp.width,bmp.height));
+  const c = document.createElement("canvas"); c.width=Math.round(bmp.width*sc); c.height=Math.round(bmp.height*sc);
+  const g = c.getContext("2d"); g.imageSmoothingEnabled=true; g.imageSmoothingQuality="high"; g.fillStyle="#fff"; g.fillRect(0,0,c.width,c.height); g.drawImage(bmp,0,0,c.width,c.height);
+  if(bmp.close) bmp.close();
+  if(gray){ const im=g.getImageData(0,0,c.width,c.height), d=im.data; for(let i=0;i<d.length;i+=4){ const y=(d[i]*77+d[i+1]*150+d[i+2]*29)>>8; d[i]=d[i+1]=d[i+2]=y; } g.putImageData(im,0,0); }
+  try{ enhancePaper(g, c.width, c.height); }catch(e){}
+  let out=null;
+  for(const q of [0.7,0.6,0.5,0.42]){ out = await new Promise(r=>c.toBlob(r,"image/jpeg",q)); if(out && out.size <= (gray?220000:320000)) break; }
+  return {blob:out, w:c.width, h:c.height};
+}
+async function pagesToPDF(pages){
+  const {jsPDF} = window.jspdf;
+  const W=612, H=792, M=18; /* letter, in points, small margin */
+  let doc=null;
+  for(const p of pages){
+    const land = p.w > p.h, pw = land?H:W, ph = land?W:H;
+    if(!doc) doc = new jsPDF({unit:"pt", format:"letter", orientation:land?"landscape":"portrait", compress:true});
+    else doc.addPage("letter", land?"landscape":"portrait");
+    const s = Math.min((pw-2*M)/p.w, (ph-2*M)/p.h), dw=p.w*s, dh=p.h*s;
+    doc.addImage(new Uint8Array(await p.blob.arrayBuffer()), "JPEG", (pw-dw)/2, (ph-dh)/2, dw, dh, undefined, "NONE");
+  }
+  return doc.output("blob");
+}
+function scanContract(){
+  const id=S.openJob, j=S.jobs[id]; if(!j) return;
+  const pages=[]; let gray=true, saved=null;
+  const safe = s => String(s||"").replace(/[\\/:*?"<>|]+/g,"").trim();
+  openModal(`<h2>Scan contract</h2>
+    <p class="small muted" style="margin:0">Take a photo of each page, in order. Lay the page flat in good light.</p>
+    <div class="field"><label for="sc-name">File name</label><input class="input" id="sc-name" data-nofocus="1" value="${esc(safe("Contract - "+(j.name||"Customer")+" - "+today()))}"></div>
+    <div class="grid2">
+      <button type="button" class="btn block" id="sc-cam">📷 Take photo of page</button>
+      <span class="btn block filebtn">🖼 Add from gallery<input id="sc-lib" type="file" accept="image/*" multiple aria-label="Add contract pages from gallery"></span>
+    </div>
+    <div class="scanpages" id="sc-pages"></div>
+    <label class="row small" style="gap:8px"><input type="checkbox" id="sc-gray" checked> Black &amp; white (smallest file, best for text)</label>
+    <p class="small muted" style="margin:0" id="sc-msg">No pages yet.</p>
+    <div class="row"><button class="btn primary" id="sc-save" disabled>Save as PDF</button><button class="btn ghost" data-act="closeModal">Cancel</button></div>`, box=>{
+    const msg=box.querySelector("#sc-msg"), saveBtn=box.querySelector("#sc-save");
+    const draw=()=>{
+      box.querySelector("#sc-pages").innerHTML = pages.map((p,i)=>`<figure><img src="${p.url}" alt="Page ${i+1}"><figcaption>${i+1}</figcaption><button type="button" data-rm="${i}" aria-label="Remove page ${i+1}">✕</button></figure>`).join("");
+      const kb=Math.round(pages.reduce((a,p)=>a+p.blob.size,0)/1024);
+      msg.textContent = pages.length ? `${pages.length} page${pages.length>1?"s":""} · about ${kb} KB` : "No pages yet.";
+      saveBtn.disabled = !pages.length;
+    };
+    const add=async files=>{
+      for(const f of files){ if(!f || !String(f.type||"image/jpeg").startsWith("image/")) continue;
+        msg.textContent="Cleaning up page…";
+        try{ const p=await scanPage(f, gray); p.src=f; p.url=URL.createObjectURL(p.blob); pages.push(p); }catch(e){ toast("Couldn't read that photo"); } }
+      draw();
+    };
+    box.querySelector("#sc-pages").addEventListener("click", e=>{ const b=e.target.closest("[data-rm]"); if(!b) return; const [p]=pages.splice(Number(b.dataset.rm),1); if(p) URL.revokeObjectURL(p.url); draw(); });
+    box.querySelector("#sc-lib").addEventListener("change", e=>{ const fs=[...e.target.files]; e.target.value=""; add(fs); });
+    box.querySelector("#sc-cam").addEventListener("click", async ()=>{
+      const r = await openCamera(`Page ${pages.length+1}: fill the screen with the whole page`);
+      if(r instanceof Blob) return add([r]);
+      if(r===null) return;
+      msg.textContent = r==="denied" ? "Camera is blocked. Allow the camera for this site in Chrome settings, or use Add from gallery." : "The camera couldn't start. Try again, or use Add from gallery.";
+    });
+    box.querySelector("#sc-gray").addEventListener("change", async e=>{
+      gray=e.target.checked; if(!pages.length) return;
+      msg.textContent="Redoing pages…"; saveBtn.disabled=true;
+      for(const p of pages){ const np=await scanPage(p.src, gray); URL.revokeObjectURL(p.url); Object.assign(p, np, {url:URL.createObjectURL(np.blob)}); }
+      draw();
+    });
+    saveBtn.addEventListener("click", async ()=>{
+      if(saved){ shareOrSave(saved.blob, saved.name, saved.name); return; }
+      if(!pages.length) return;
+      saveBtn.disabled=true; saveBtn.textContent="Making PDF…";
+      const name=(safe(box.querySelector("#sc-name").value)||"Contract")+".pdf";
+      try{
+        const pdf = await pagesToPDF(pages);
+        saveBtn.textContent="Uploading…";
+        const item={id:rid(), name, type:"application/pdf", t:Date.now(), assetId:null, drive:null, category:"Contract", pages:pages.length};
+        item.assetId = await storeAsset(pdf, "application/pdf", id);
+        await mutateJob(id, x=>{ x.docs=x.docs||[]; x.docs.push(item); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"system",text:`Scanned contract saved (${pages.length} page${pages.length>1?"s":""})`}); });
+        pages.forEach(p=>URL.revokeObjectURL(p.url));
+        saved={blob:pdf, name};
+        msg.textContent=`Saved ${name} (${Math.max(1,Math.round(pdf.size/1024))} KB). It's in this job's Documents.`;
+        box.querySelector("#sc-cam").disabled=true; box.querySelector("#sc-lib").disabled=true; box.querySelector("#sc-gray").disabled=true;
+        box.querySelector("#sc-pages").innerHTML="";
+        saveBtn.disabled=false; saveBtn.textContent="📤 Send it now";
+        const cancel=box.querySelector("[data-act=closeModal]"); if(cancel) cancel.textContent="Done";
+      }catch(e){ saveBtn.disabled=false; saveBtn.textContent="Save as PDF"; toast(e && e.message==="No signal" ? "No signal. The PDF didn't upload." : assetErr(e)); }
+    });
+  });
+}
+/* move a job between Roofing and Retail; notes, files, money and history all come along */
+function convertBoard(to){
+  const id=S.openJob, j=S.jobs[id]; if(!j || j.trade===to) return;
+  if(S.mode==="employee" && !can("b_"+to)){ toast("You don't have access to the "+tradeName(to)+" board"); return; }
+  const stages=STAGES[to], def=stages.includes(j.stage) ? j.stage : "Lead";
+  openModal(`<h2>Convert to ${esc(tradeName(to))}</h2>
+    <p class="muted" style="margin:0">${esc(j.name||"This job")} moves from ${esc(tradeName(j.trade))} to ${esc(tradeName(to))}. Notes, files, payments and expenses all stay with it.</p>
+    <div class="field"><label for="cv-stage">Stage on the ${esc(tradeName(to))} board</label>
+      <select class="input" id="cv-stage">${stages.map(st=>`<option ${st===def?"selected":""}>${esc(st)}</option>`).join("")}</select></div>
+    ${to==="other"?`<div class="field"><label for="cv-type">Job type</label><select class="input" id="cv-type"><option value="">Pick one</option>${JOB_TYPES.map(t=>`<option ${j.jobType===t?"selected":""}>${esc(t)}</option>`).join("")}</select></div>`:""}
+    <div class="row"><button class="btn primary" id="cv-go">Convert</button><button class="btn ghost" data-act="closeModal">Cancel</button></div>`, box=>{
+    box.querySelector("#cv-go").addEventListener("click", ()=>{
+      const st=box.querySelector("#cv-stage").value, jt=box.querySelector("#cv-type")?.value;
+      const from=tradeName(j.trade);
+      mutateJob(id, x=>{
+        x.trade=to; x.stage=st; x.closedAt = st===CLOSED[to] ? (x.closedAt||Date.now()) : null;
+        if(to==="other" && jt) x.jobType=jt;
+        x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:`Converted from ${from} to ${tradeName(to)} (${st})`});
+      });
+      S.trade=to; try{localStorage.setItem("rh-trade",to);}catch(e){}
+      closeModal(); toast("Converted to "+tradeName(to));
+    });
+  });
+}
+function colSort(stage){
+  const key=S.trade+"|"+stage, cur=S.colSort[key]||"";
+  openModal(`<h2>Sort ${esc(stage)}</h2>
+    <div class="chips" role="group" aria-label="Sort order" style="flex-direction:column;align-items:stretch">${COL_SORTS.map(([v,l])=>`<button class="chip" data-sort="${esc(v)}" aria-pressed="${cur===v}" style="text-align:left">${esc(l)}</button>`).join("")}</div>
+    <p class="small muted" style="margin:0">Only this column changes. It's remembered on this device.</p>`, box=>{
+    box.addEventListener("click", e=>{ const b=e.target.closest("[data-sort]"); if(!b) return;
+      if(b.dataset.sort) S.colSort[key]=b.dataset.sort; else delete S.colSort[key];
+      try{ localStorage.setItem("rh-colsort", JSON.stringify(S.colSort)); }catch(err){}
+      closeModal(); render(); });
   });
 }
 const ASSET_TYPES = ["image/png","image/jpeg","image/gif","image/webp","application/pdf"];
@@ -1113,10 +1261,12 @@ function attentionBox(){
 function boardCols(){
   const jobs = Object.values(S.jobs).filter(j=>j.trade===S.trade && !j.lost);
   const cols = STAGES[S.trade].map(st=>{
-    const list = jobs.filter(j=>j.stage===st).sort(st==="Appointment" ? (a,b)=>(a.appointmentAt||9e15)-(b.appointmentAt||9e15) : (a,b)=>attnSort(a,b) || ((b.lastContact||b.createdAt)-(a.lastContact||a.createdAt)));
+    const sk = S.colSort[S.trade+"|"+st] || "";
+    const list = jobs.filter(j=>j.stage===st).sort(colSortFns[sk] || (st==="Appointment" ? colSortFns.appt : (a,b)=>attnSort(a,b) || ((b.lastContact||b.createdAt)-(a.lastContact||a.createdAt))));
     const sum = list.reduce((a,j)=>a+n(j.contract),0);
-    return `<section class="col${st==="Payment Needed"?" paycol":""}" data-stage="${esc(st)}" aria-label="${esc(st)}">
-      <div class="colhead"><h2>${esc(st)}</h2><span class="ct">${list.length}</span>${sum&&can("money")?`<span class="sum num">${money(sum)}</span>`:""}</div>
+    return `<section class="col${st==="Payment Needed"?" paycol":""}${st==="Hot Lead"?" hotcol":""}" data-stage="${esc(st)}" aria-label="${esc(st)}">
+      <div class="colhead"><h2>${st==="Hot Lead"?"🔥 ":""}${esc(st)}</h2><span class="ct">${list.length}</span>${sum&&can("money")?`<span class="sum num">${money(sum)}</span>`:""}
+        <button class="colsort${sk?" on":""}" data-act="colSort" data-v="${esc(st)}" aria-label="Sort ${esc(st)}${sk?": "+esc((COL_SORTS.find(x=>x[0]===sk)||[])[1]||""):""}" title="Sort this column"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z" fill="${sk?"currentColor":"none"}" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button></div>
       ${list.map(cardHTML).join("") || (st==="Lead" && !jobs.length ? `<div class="empty-col">No ${tradeName(S.trade).toLowerCase()} leads yet. Tap + to add your first one.</div>` : `<div class="empty-col">Nothing here</div>`)}
     </section>`;
   }).join("");
@@ -1417,6 +1567,7 @@ function jobInfo(j){
     ${j.trade==="roofing" ? (j.builtAt
       ? `<div class="row"><span class="pill built">🏠 Built · ${fdate(j.builtAt)}</span><button class="btn small ghost" data-act="toggleBuilt">Undo</button></div>`
       : `<button class="btn" data-act="toggleBuilt" style="border-color:var(--built);color:var(--built)">🏠 Mark house built</button>`) : ""}
+    ${can("edit") && TRADES.some(([k])=>k!==j.trade) ? TRADES.filter(([k])=>k!==j.trade).map(([k,l])=>`<button class="btn" data-act="convertBoard" data-v="${esc(k)}">⇄ Convert to ${esc(l)}</button>`).join("") : ""}
   </div>
   <div class="panel stack"><h3 class="sec"><label for="f-appointmentAt">Appointment</label>${j.submittedBy?`<span class="r pill partner" style="font-family:var(--f-body);letter-spacing:0;text-transform:none">From ${esc(j.submittedBy)}</span>`:""}</h3>
     <input class="input" id="f-appointmentAt" data-field="appointmentAt" type="datetime-local" value="${j.appointmentAt?toLocalInput(j.appointmentAt):""}">
@@ -1572,6 +1723,8 @@ function jobFiles(j){
   return `<div class="panel stack">
     <h3 class="sec">Documents</h3>
     <p class="small muted" style="margin:0">Contracts, insurance scopes, photos. Photos and PDFs work best.</p>
+    ${can("files")?`<button class="btn primary block" data-act="scanContract">📷 Scan contract to PDF</button>
+    <p class="small muted" style="margin:0">Take a photo of each page. It's cleaned up, shrunk and saved as one small PDF you can send.</p>`:""}
     <div class="dropzone" id="docDrop" ${can("files")?"":"hidden"}>
       <b>Drop files here</b><span class="small muted">PDFs and photos, one or many</span>
       <span class="btn primary filebtn" style="margin-top:6px">+ Choose files<input id="docInput" type="file" accept="image/*,application/pdf" multiple aria-label="Upload documents"></span>
@@ -1579,7 +1732,7 @@ function jobFiles(j){
     ${docs.length?`<div class="list">${docs.map(d=>`<div class="li">
       ${d.assetId && d.type!=="application/pdf"?`<img class="thumb" src="${urlFor(d.assetId)||PIXEL}" alt="">`:`<div class="thumb">${d.type==="application/pdf"?"PDF":"FILE"}</div>`}
       <div class="grow"><div class="t">${esc(d.name)}${d.category?` <span class="tag">${esc(d.category)}</span>`:""}</div><div class="s">${fdate(d.t)}</div>
-      <div class="row" style="margin-top:6px;gap:6px">${d.assetId?`<a class="btn small" href="${urlFor(d.assetId)||"#"}" target="_blank" rel="noopener">Open</a>`:""}${driveTag({...d,_list:"docs"})}</div></div>
+      <div class="row" style="margin-top:6px;gap:6px">${d.assetId?`<a class="btn small" href="${urlFor(d.assetId)||"#"}" target="_blank" rel="noopener">Open</a><button class="btn small" data-act="sendDoc" data-item="${esc(d.id)}">Send / save</button>`:""}${driveTag({...d,_list:"docs"})}</div></div>
       ${S.isOwner?`<button class="btn small ghost danger" data-act="delItem" data-list="docs" data-item="${esc(d.id)}" aria-label="Delete document">✕</button>`:""}
     </div>`).join("")}</div>`:""}
   </div>
@@ -1944,6 +2097,9 @@ const ACT = {
     mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; if(st==="Built" && !x.builtAt) x.builtAt=Date.now(); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
   },
   setPath:b=>setPath(S.openJob, b.dataset.v),
+  convertBoard:b=>convertBoard(b.dataset.v),
+  scanContract:()=>scanContract(),
+  colSort:b=>colSort(b.dataset.v),
   editEmployee:b=>editEmployee(b.dataset.id),
   testMyAlarm:async()=>{ const ok=await pushAlert(myTopic(),{title:"Red Hammer CRM test alarm", message:"Reminder alarms are working.", priority:5, tags:"alarm_clock"}); toast(ok?"Test alarm sent":"Couldn't reach the alarm service"); },
   newReminder:b=>newReminder(b.dataset.id || (S.view!=="reminders" || S.openJob ? S.openJob : null)),
@@ -2044,7 +2200,7 @@ const ACT = {
   ptab:b=>{ S.ptab=b.dataset.v; S.openJob=null; render(); window.scrollTo(0,0); },
   forceUpdate:()=>location.replace(location.pathname+"?v="+Date.now()),
 };
-const NEED = {stage:"edit", nextStage:"edit", toggleSigned:"edit", toggleBuilt:"edit", setPath:"edit", ackAttn:"edit", addNote:"edit", logCall:"edit", logEmail:"edit",
+const NEED = {stage:"edit", nextStage:"edit", convertBoard:"edit", scanContract:"files", toggleSigned:"edit", toggleBuilt:"edit", setPath:"edit", ackAttn:"edit", addNote:"edit", logCall:"edit", logEmail:"edit",
   reopen:"edit", addPayPhoto:"payments", addPayment:"payments", makeReceipt:"payments", addExpense:"expenses", estToContract:"money", addPayout:"owner", editPartner:"owner",
   backupJson:"owner", backupCsv:"owner", testAlarm:"owner", editEmployee:"owner", editContact:"owner", subProfile:"owner", quickAdd:"addLeads"};
 document.addEventListener("click", e=>{
@@ -2060,7 +2216,7 @@ document.addEventListener("click", e=>{
 
 /* field edits on the job sheet */
 /* what still works with no signal: looking around, calling, texting, copying */
-const VIEW_ONLY = new Set(["trade","view","open","close","jtab","period","pfReset","closeModal","modalBg","copy","callStart","emailStart","ptab","forceUpdate","backupCsv"]);
+const VIEW_ONLY = new Set(["trade","view","open","close","jtab","period","pfReset","closeModal","modalBg","copy","callStart","emailStart","ptab","forceUpdate","backupCsv","colSort"]);
 document.addEventListener("change", e=>{
   const el=e.target;
   if(el.id==="pf-from"||el.id==="pf-to"){ if(!el.value) return; if(el.id==="pf-from") S.pFrom=el.value; else S.pTo=el.value; render(); return; }
