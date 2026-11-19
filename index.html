@@ -102,6 +102,8 @@ main{padding:14px 16px calc(90px + env(safe-area-inset-bottom,0px))}
 .col.drop-before{box-shadow:-4px 0 0 var(--red)}
 .col.drop-after{box-shadow:4px 0 0 var(--red)}
 .colghost{position:fixed;z-index:80;pointer-events:none;background:var(--surface);border:2px solid var(--red);border-radius:8px;padding:6px 10px;font-family:var(--f-display);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:14px;box-shadow:var(--shadow);transform:translate(-50%,-120%)}
+.col.addcol{min-height:64px;align-items:center;justify-content:center;border:2px dashed var(--line);background:none;color:var(--muted);font-family:var(--f-display);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:14px;cursor:pointer}
+.col.addcol:hover{color:var(--ink);border-color:var(--muted)}
 .col.hotcol .colhead h2,.col.hotcol .colhead .ct{color:var(--a30)}
 .scanpages{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px}
 .scanpages figure{margin:0;position:relative;background:var(--sunk);border-radius:8px;overflow:hidden;aspect-ratio:3/4}
@@ -341,7 +343,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Nov 18 · Movable columns, drag to scroll";
+const APP_VERSION = "Nov 18 · Edit, add and delete columns";
 /* per-column sort, chosen with the funnel button on each column; remembered on this device */
 const COL_SORTS = [["","Default (needs attention first)"],["newest","Newest first"],["oldest","Oldest first"],["contact","Last contacted"],["name","Name A to Z"],["amount","Biggest contract"],["appt","Soonest appointment"]];
 const colSortFns = {
@@ -366,8 +368,16 @@ try{ const t=localStorage.getItem("rh-trade"); if(t && TRADES.some(x=>x[0]===t))
 S.colSort={}; try{ S.colSort=JSON.parse(localStorage.getItem("rh-colsort")||"{}")||{}; }catch(e){}
 S.colOrderLocal={}; try{ S.colOrderLocal=JSON.parse(localStorage.getItem("rh-colorder")||"{}")||{}; }catch(e){}
 /* column order: the owner's order is saved to the account (every device); employees keep their own on their device */
-function colOrder(trade){
-  const base=STAGES[trade]||[], saved=S.colOrderLocal[trade] || ((S.settings.colOrder||{})[trade]);
+/* columns the owner can rename, add and delete. A job stores the column's key, which never changes,
+   so renaming is instant and built-in behavior (Appointment alarms, Denied paths, Complete = closed) keeps working. */
+const stageCfg = (k, trade) => ((S.settings[k]||{})[trade]) || (k==="stageLabels" ? {} : []);
+const stageLabel = (trade, key) => stageCfg("stageLabels", trade)[key] || key;
+const stageList = trade => [...(STAGES[trade]||[]).filter(st=>!stageCfg("removedStages",trade).includes(st)), ...stageCfg("customStages",trade)];
+const lockedStage = (trade, key) => key==="Lead" || key===CLOSED[trade] || (trade==="roofing" && key==="Appointment");
+function colOrder(trade, ownerOnly){
+  const local=!ownerOnly && S.colOrderLocal[trade];
+  /* an employee's own order is laid over the owner's, so columns the owner adds land in the owner's spot */
+  const base = local ? colOrder(trade, true) : stageList(trade), saved = local || ((S.settings.colOrder||{})[trade]);
   if(!Array.isArray(saved) || !saved.length) return base.slice();
   const out=saved.filter(st=>base.includes(st));
   base.forEach((st,i)=>{ if(!out.includes(st)){ const prev=base.slice(0,i).reverse().find(p=>out.includes(p)); out.splice(prev?out.indexOf(prev)+1:0, 0, st); } });
@@ -850,11 +860,11 @@ function scanContract(){
 function convertBoard(to){
   const id=S.openJob, j=S.jobs[id]; if(!j || j.trade===to) return;
   if(S.mode==="employee" && !can("b_"+to)){ toast("You don't have access to the "+tradeName(to)+" board"); return; }
-  const stages=STAGES[to], def=stages.includes(j.stage) ? j.stage : "Lead";
+  const stages=colOrder(to), def=stages.includes(j.stage) ? j.stage : "Lead";
   openModal(`<h2>Convert to ${esc(tradeName(to))}</h2>
     <p class="muted" style="margin:0">${esc(j.name||"This job")} moves from ${esc(tradeName(j.trade))} to ${esc(tradeName(to))}. Notes, files, payments and expenses all stay with it.</p>
     <div class="field"><label for="cv-stage">Stage on the ${esc(tradeName(to))} board</label>
-      <select class="input" id="cv-stage">${stages.map(st=>`<option ${st===def?"selected":""}>${esc(st)}</option>`).join("")}</select></div>
+      <select class="input" id="cv-stage">${stages.map(st=>`<option value="${esc(st)}" ${st===def?"selected":""}>${esc(stageLabel(to,st))}</option>`).join("")}</select></div>
     ${to==="other"?`<div class="field"><label for="cv-type">Job type</label><select class="input" id="cv-type"><option value="">Pick one</option>${JOB_TYPES.map(t=>`<option ${j.jobType===t?"selected":""}>${esc(t)}</option>`).join("")}</select></div>`:""}
     <div class="row"><button class="btn primary" id="cv-go">Convert</button><button class="btn ghost" data-act="closeModal">Cancel</button></div>`, box=>{
     box.querySelector("#cv-go").addEventListener("click", ()=>{
@@ -863,7 +873,7 @@ function convertBoard(to){
       mutateJob(id, x=>{
         x.trade=to; x.stage=st; x.closedAt = st===CLOSED[to] ? (x.closedAt||Date.now()) : null;
         if(to==="other" && jt) x.jobType=jt;
-        x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:`Converted from ${from} to ${tradeName(to)} (${st})`});
+        x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:`Converted from ${from} to ${tradeName(to)} (${stageLabel(to,st)})`});
       });
       S.trade=to; try{localStorage.setItem("rh-trade",to);}catch(e){}
       closeModal(); toast("Converted to "+tradeName(to));
@@ -871,16 +881,94 @@ function convertBoard(to){
   });
 }
 function colSort(stage){
-  const key=S.trade+"|"+stage, cur=S.colSort[key]||"";
-  openModal(`<h2>Sort ${esc(stage)}</h2>
+  const key=S.trade+"|"+stage, cur=S.colSort[key]||"", owner=S.mode==="owner", locked=lockedStage(S.trade, stage);
+  openModal(`<h2>${esc(stageLabel(S.trade,stage))}</h2>
+    ${owner?`<div class="row" style="gap:6px;flex-wrap:wrap">
+      <button class="btn small" type="button" id="cs-rename">✏️ Rename</button>
+      <button class="btn small" type="button" id="cs-add">＋ Add column after this</button>
+      ${locked?"":`<button class="btn small danger" type="button" id="cs-del">🗑 Delete column</button>`}
+    </div>${locked?`<p class="small muted" style="margin:0">This column can be renamed but not deleted: the CRM relies on it${stage==="Lead"?" for new leads":stage==="Appointment"?" for partner appointments":" to mark jobs closed"}.</p>`:""}`:""}
+    <h3 class="sec" style="margin-top:4px">Sort this column</h3>
     <div class="chips" role="group" aria-label="Sort order" style="flex-direction:column;align-items:stretch">${COL_SORTS.map(([v,l])=>`<button class="chip" data-sort="${esc(v)}" aria-pressed="${cur===v}" style="text-align:left">${esc(l)}</button>`).join("")}</div>
-    <p class="small muted" style="margin:0">Only this column changes. It's remembered on this device.</p>
+    <p class="small muted" style="margin:0">Sorting only changes this column, on this device.</p>
     <button class="btn ghost small" id="cs-reset" type="button">Put columns back in the original order</button>`, box=>{
-    box.querySelector("#cs-reset").addEventListener("click", ()=>{ saveColOrder(S.trade, STAGES[S.trade].slice()); closeModal(); toast("Columns reset"); });
+    box.querySelector("#cs-rename")?.addEventListener("click", ()=>renameColumn(S.trade, stage));
+    box.querySelector("#cs-add")?.addEventListener("click", ()=>addColumn(S.trade, stage));
+    box.querySelector("#cs-del")?.addEventListener("click", ()=>deleteColumn(S.trade, stage));
+    box.querySelector("#cs-reset").addEventListener("click", ()=>{ saveColOrder(S.trade, stageList(S.trade)); closeModal(); toast("Columns reset"); });
     box.addEventListener("click", e=>{ const b=e.target.closest("[data-sort]"); if(!b) return;
       if(b.dataset.sort) S.colSort[key]=b.dataset.sort; else delete S.colSort[key];
       try{ localStorage.setItem("rh-colsort", JSON.stringify(S.colSort)); }catch(err){}
       closeModal(); render(); });
+  });
+}
+/* ----- column editing (owner only; saved to the account, so every device and employee sees it) ----- */
+function nameTaken(trade, name, except){
+  const t=name.trim().toLowerCase();
+  return colOrder(trade).some(k=>k!==except && stageLabel(trade,k).trim().toLowerCase()===t);
+}
+function columnNameModal(title, start, btn, onSave){
+  openModal(`<h2>${esc(title)}</h2>
+    <div class="field"><label for="cn-name">Column name</label><input class="input" id="cn-name" maxlength="40" value="${esc(start||"")}" autocomplete="off"></div>
+    <p class="small muted" id="cn-msg" style="margin:0"></p>
+    <div class="row"><button class="btn primary" id="cn-go">${esc(btn)}</button><button class="btn ghost" data-act="closeModal">Cancel</button></div>`, box=>{
+    const inp=box.querySelector("#cn-name"), go=()=>{ const v=inp.value.replace(/\s+/g," ").trim(); const err=onSave(v); if(err){ box.querySelector("#cn-msg").textContent=err; box.querySelector("#cn-msg").style.color="var(--red)"; } };
+    box.querySelector("#cn-go").addEventListener("click", go);
+    inp.addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); go(); } });
+    setTimeout(()=>inp.select(), 40);
+  });
+}
+function renameColumn(trade, key){
+  columnNameModal("Rename column", stageLabel(trade,key), "Save name", v=>{
+    if(!v) return "Type a name.";
+    if(nameTaken(trade, v, key)) return "Another column already has that name.";
+    const labels={...stageCfg("stageLabels",trade)}; if(v===key) delete labels[key]; else labels[key]=v;
+    saveSettings({stageLabels:{...(S.settings.stageLabels||{}), [trade]:labels}});
+    closeModal(); toast("Renamed to "+v);
+  });
+}
+function addColumn(trade, afterKey){
+  columnNameModal("Add a column", "", "Add column", v=>{
+    if(!v) return "Type a name.";
+    if(nameTaken(trade, v)) return "A column with that name already exists.";
+    const removed=stageCfg("removedStages",trade), custom=stageCfg("customStages",trade), labels={...stageCfg("stageLabels",trade)};
+    /* bringing back a built-in column that was deleted keeps its original key */
+    const back=removed.find(k=>k.toLowerCase()===v.toLowerCase());
+    const key = back || ("c_"+rid());
+    if(!back) labels[key]=v; else if(v!==back) labels[key]=v; else delete labels[key];
+    const order=colOrder(trade).filter(k=>k!==key); const at=afterKey ? order.indexOf(afterKey)+1 : order.length; order.splice(at<=0?order.length:at, 0, key);
+    saveSettings({
+      removedStages:{...(S.settings.removedStages||{}), [trade]:removed.filter(k=>k!==key)},
+      customStages:{...(S.settings.customStages||{}), [trade]:back?custom:[...custom, key]},
+      stageLabels:{...(S.settings.stageLabels||{}), [trade]:labels},
+      colOrder:{...(S.settings.colOrder||{}), [trade]:order}
+    });
+    closeModal(); toast("Added "+v);
+  });
+}
+function deleteColumn(trade, key){
+  if(lockedStage(trade,key)){ toast("That column can't be deleted"); return; }
+  const jobs=Object.values(S.jobs).filter(j=>j.trade===trade && j.stage===key);
+  const others=colOrder(trade).filter(k=>k!==key), label=stageLabel(trade,key);
+  openModal(`<h2>Delete "${esc(label)}"?</h2>
+    ${jobs.length?`<p class="muted" style="margin:0">${jobs.length} job${jobs.length>1?"s are":" is"} in this column${jobs.some(j=>j.lost)?" (including lost leads)":""}. Move ${jobs.length>1?"them":"it"} to:</p>
+      <select class="input" id="dc-to">${others.map(k=>`<option value="${esc(k)}" ${k==="Lead"?"selected":""}>${esc(stageLabel(trade,k))}</option>`).join("")}</select>`
+      :`<p class="muted" style="margin:0">No jobs are in this column.</p>`}
+    <div class="row"><button class="btn danger" id="dc-go">Delete column</button><button class="btn ghost" data-act="closeModal">Cancel</button></div>`, box=>{
+    box.querySelector("#dc-go").addEventListener("click", async ()=>{
+      const btn=box.querySelector("#dc-go"); btn.disabled=true; btn.textContent="Deleting…";
+      const to=box.querySelector("#dc-to")?.value || "Lead";
+      for(const j of jobs){ await mutateJob(j.id, x=>{ x.stage=to; x.closedAt = to===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:`Moved to ${stageLabel(trade,to)} (column "${label}" was deleted)`}); }); }
+      const custom=stageCfg("customStages",trade), isCustom=custom.includes(key), labels={...stageCfg("stageLabels",trade)}; delete labels[key];
+      await saveSettings({
+        customStages:{...(S.settings.customStages||{}), [trade]:custom.filter(k=>k!==key)},
+        removedStages:{...(S.settings.removedStages||{}), [trade]:isCustom?stageCfg("removedStages",trade):[...stageCfg("removedStages",trade), key]},
+        stageLabels:{...(S.settings.stageLabels||{}), [trade]:labels},
+        colOrder:{...(S.settings.colOrder||{}), [trade]:others}
+      });
+      delete S.colSort[trade+"|"+key]; try{ localStorage.setItem("rh-colsort", JSON.stringify(S.colSort)); }catch(e){}
+      closeModal(); toast(`Deleted "${label}"`);
+    });
   });
 }
 const ASSET_TYPES = ["image/png","image/jpeg","image/gif","image/webp","application/pdf"];
@@ -1099,7 +1187,7 @@ function backupCsv(){
   const d=t=>t?new Date(t).toLocaleDateString("en-US"):"";
   const head=["Board","Stage","Name","Phone","Email","Address","Lead source","Appointment","Added","Contract","Expenses","Paid by customer","Balance due","Profit","Partner share","You keep","Signed contingency","Lost","Lost reason","Insurance","Claim #"];
   const rows=Object.values(S.jobs).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0)).map(j=>{ const c=calc(j);
-    return [tradeName(j.trade), j.lost?"Lost":j.stage, j.name, j.phone, j.email, j.address, srcLabel(j), j.appointmentAt?new Date(j.appointmentAt).toLocaleString("en-US"):"", d(j.createdAt),
+    return [tradeName(j.trade), j.lost?"Lost":stageLabel(j.trade,j.stage), j.name, j.phone, j.email, j.address, srcLabel(j), j.appointmentAt?new Date(j.appointmentAt).toLocaleString("en-US"):"", d(j.createdAt),
       c.contract.toFixed(2), c.expenses.toFixed(2), c.paid.toFixed(2), c.balance.toFixed(2), c.profit.toFixed(2), c.partner?c.cut.toFixed(2):"", c.net.toFixed(2), j.signedAt?d(j.signedAt):"", j.lost?"Yes":"", j.lostReason, j.carrier, j.claimNo].map(q).join(","); });
   saveFile(`redhammer-customers-${stamp()}.csv`, "\ufeff"+[head.join(","),...rows].join("\r\n"), "text/csv");
   toast("Customer list downloaded");
@@ -1133,7 +1221,7 @@ function renderPartner(){
     <p class="small muted" style="margin:0"><b>Opened</b>: Gabriel is working it. <b>Signed</b>: the homeowner signed the contingency. <b>Dead</b>: it didn't go anywhere. "In the pipeline" is your expected share on open jobs; you earn it when a job is complete.</p>
     ${jobs.length?[["Upcoming appointments",jobs.filter(j=>isOpen(j)&&j.stage==="Appointment").sort((a,b)=>(a.appointmentAt||0)-(b.appointmentAt||0))],["Signed",jobs.filter(j=>isOpen(j)&&j.stage!=="Appointment"&&j.signedAt)],["Opened",jobs.filter(j=>isOpen(j)&&j.stage!=="Appointment"&&!j.signedAt)],["Completed",jobs.filter(j=>!j.lost&&isClosed(j))],["Dead",jobs.filter(j=>j.lost)]].filter(g=>g[1].length).map(([label,list])=>`<div class="panel stack" style="gap:4px"><h3 class="sec">${label} <span class="r small muted" style="font-family:var(--f-body);letter-spacing:0;text-transform:none;font-weight:400">${list.length}</span></h3><div class="list">${list.map(j=>{ const c=calc(j); return `<div class="li" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer">
       <div class="grow"><div class="t">${esc(j.name||"No name")}</div>
-      <div class="s">${j.builtAt&&!j.lost?`<span class="pill built" style="font-size:11px;padding:2px 6px">🏠 Built</span> `:""}${j.signedAt&&!j.lost?`<span class="pill signed" style="font-size:11px;padding:2px 6px">✓ Signed</span> `:""}${j.lost?"Dead":esc(j.stage)}${j.appointmentAt?" · 📅 "+esc(fdtLong(j.appointmentAt)):""}${j.address?" · "+esc(j.address):""}</div></div>
+      <div class="s">${j.builtAt&&!j.lost?`<span class="pill built" style="font-size:11px;padding:2px 6px">🏠 Built</span> `:""}${j.signedAt&&!j.lost?`<span class="pill signed" style="font-size:11px;padding:2px 6px">✓ Signed</span> `:""}${j.lost?"Dead":esc(stageLabel(j.trade,j.stage))}${j.appointmentAt?" · 📅 "+esc(fdtLong(j.appointmentAt)):""}${j.address?" · "+esc(j.address):""}</div></div>
       <div style="text-align:right"><b class="num">${j.lost?"—":c.contract?money(c.cut):"—"}</b><div class="s small muted">${j.lost?"":paidOut(j)>=c.cut&&c.cut>0?"paid":paidOut(j)>0?money(paidOut(j))+" paid":"your share"}</div></div></div>`; }).join("")}</div></div>`).join("")
       :`<div class="emptybox"><b>No appointments yet</b>Tap <b>Set appointment</b> to book Gabriel your first one.</div>`}
     <div class="row"><button class="btn" data-act="signOut">Sign out</button></div>
@@ -1186,12 +1274,12 @@ function renderPartnerSheet(){
   const ex=[...(j.expenses||[])].sort((a,b)=>(b.date||0)-(a.date||0));
   const notes=[...(j.notes||[])].filter(x=>!(x.kind==="system" && /^Payment /.test(x.text||""))).sort((a,b)=>b.t-a.t);
   el.innerHTML=`<div class="scrim" data-act="close"></div><div class="sheet" role="dialog" aria-label="${esc(j.name)}">
-    <div class="sheethead"><div class="rowtop"><button class="back" data-act="close" aria-label="Back">‹ Back</button><div class="jn">${esc(j.name||"No name")}</div><div class="tr">${j.lost?"Dead":esc(j.stage)}</div></div>
+    <div class="sheethead"><div class="rowtop"><button class="back" data-act="close" aria-label="Back">‹ Back</button><div class="jn">${esc(j.name||"No name")}</div><div class="tr">${j.lost?"Dead":esc(stageLabel(j.trade,j.stage))}</div></div>
       <div class="hero"><div class="big"><span class="v num">${money(c.cut)}</span><span class="k">your share · ${n(c.pct)}% of ${c.basis==="contract"?"contract":"profit"}</span></div>
       <div class="kv num"><div><span>Contract</span><b>${money(c.contract)}</b></div><div><span>Expenses</span><b>${money(c.expenses)}</b></div><div><span>Profit</span><b>${money(c.profit)}</b></div></div></div></div>
     <div class="sheetbody">
       <div class="panel stack"><h3 class="sec">Details</h3><div class="list">
-        <div class="li"><div class="grow">Stage</div><b>${j.lost?"Dead":esc(j.stage)}</b></div>
+        <div class="li"><div class="grow">Stage</div><b>${j.lost?"Dead":esc(stageLabel(j.trade,j.stage))}</b></div>
         ${j.signedAt&&!j.lost?`<div class="li"><div class="grow">Contingency</div><span class="pill signed">✓ Signed ${fdate(j.signedAt)}</span></div>`:""}
         ${j.builtAt&&!j.lost?`<div class="li"><div class="grow">House</div><span class="pill built">🏠 Built ${fdate(j.builtAt)}</span></div>`:""}
         ${j.appointmentAt?`<div class="li"><div class="grow">Appointment</div><b>${esc(fdtLong(j.appointmentAt))}</b></div>`:""}
@@ -1278,7 +1366,7 @@ function searchResults(){
   if(!hits.length) return `<div class="emptybox"><b>No customers match "${esc(S.search.trim())}"</b>Search checks every board and Lost Leads.</div>`;
   return `<div class="panel list">${hits.map(j=>`<div class="li" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer">
     <div class="grow"><div class="t">${esc(j.name||"No name")}</div>
-    <div class="s">${esc(tradeName(j.trade))} · ${j.lost?"Lost":esc(j.stage)}${j.phone?" · "+esc(j.phone):""}${j.address?" · "+esc(j.address):""}</div></div>
+    <div class="s">${esc(tradeName(j.trade))} · ${j.lost?"Lost":esc(stageLabel(j.trade,j.stage))}${j.phone?" · "+esc(j.phone):""}${j.address?" · "+esc(j.address):""}</div></div>
     ${isOpen(j)?agePill(j):""}</div>`).join("")}</div>`;
 }
 function attentionBox(){
@@ -1286,23 +1374,27 @@ function attentionBox(){
   if(!list.length) return "";
   return `<details class="attnbox" open><summary><span class="pill attn">${list.length}</span> ${list.length===1?"Lead needs":"Leads need"} attention</summary>
     <div class="list" style="margin-top:6px">${list.map(j=>`<div class="li">
-      <div class="grow" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer"><div class="t">${esc(j.name||"No name")}</div><div class="s">${esc(j.stage)}${j.phone?" · "+esc(j.phone):""}</div></div>
+      <div class="grow" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer"><div class="t">${esc(j.name||"No name")}</div><div class="s">${esc(stageLabel(j.trade,j.stage))}${j.phone?" · "+esc(j.phone):""}</div></div>
       ${agePill(j)}<button class="btn small" data-act="ackAttn" data-id="${esc(j.id)}">Handled</button></div>`).join("")}</div>
     <p class="small muted" style="margin:6px 0 0">Logging a call, email or note also clears it until the next milestone (15, 30, 60 days).</p></details>`;
 }
 function boardCols(){
   const jobs = Object.values(S.jobs).filter(j=>j.trade===S.trade && !j.lost);
-  const cols = colOrder(S.trade).map(st=>{
+  const order = colOrder(S.trade);
+  /* safety net: a job sitting in a column that no longer exists still shows up */
+  jobs.forEach(j=>{ if(j.stage && !order.includes(j.stage)) order.push(j.stage); });
+  const addTile = S.mode==="owner" ? `<button class="col addcol" data-act="addColumn" aria-label="Add a column">＋ Add column</button>` : "";
+  const cols = order.map(st=>{
     const sk = S.colSort[S.trade+"|"+st] || "";
     const list = jobs.filter(j=>j.stage===st).sort(colSortFns[sk] || (st==="Appointment" ? colSortFns.appt : (a,b)=>attnSort(a,b) || ((b.lastContact||b.createdAt)-(a.lastContact||a.createdAt))));
     const sum = list.reduce((a,j)=>a+n(j.contract),0);
-    return `<section class="col${st==="Payment Needed"?" paycol":""}${st==="Hot Lead"?" hotcol":""}" data-stage="${esc(st)}" aria-label="${esc(st)}">
-      <div class="colhead"><span class="colgrip" title="Drag to move this column" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14"><g fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></g></svg></span><h2>${st==="Hot Lead"?"🔥 ":""}${esc(st)}</h2><span class="ct">${list.length}</span>${sum&&can("money")?`<span class="sum num">${money(sum)}</span>`:""}
-        <button class="colsort${sk?" on":""}" data-act="colSort" data-v="${esc(st)}" aria-label="Sort ${esc(st)}${sk?": "+esc((COL_SORTS.find(x=>x[0]===sk)||[])[1]||""):""}" title="Sort this column"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z" fill="${sk?"currentColor":"none"}" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button></div>
+    return `<section class="col${st==="Payment Needed"?" paycol":""}${st==="Hot Lead"?" hotcol":""}" data-stage="${esc(st)}" aria-label="${esc(stageLabel(S.trade,st))}">
+      <div class="colhead"><span class="colgrip" title="Drag to move this column" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14"><g fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></g></svg></span><h2>${st==="Hot Lead"?"🔥 ":""}${esc(stageLabel(S.trade,st))}</h2><span class="ct">${list.length}</span>${sum&&can("money")?`<span class="sum num">${money(sum)}</span>`:""}
+        <button class="colsort${sk?" on":""}" data-act="colSort" data-v="${esc(st)}" aria-label="Sort or edit ${esc(stageLabel(S.trade,st))}${sk?": "+esc((COL_SORTS.find(x=>x[0]===sk)||[])[1]||""):""}" title="Sort or edit this column"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z" fill="${sk?"currentColor":"none"}" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button></div>
       ${list.map(cardHTML).join("") || (st==="Lead" && !jobs.length ? `<div class="empty-col">No ${tradeName(S.trade).toLowerCase()} leads yet. Tap + to add your first one.</div>` : `<div class="empty-col">Nothing here</div>`)}
     </section>`;
   }).join("");
-  return `<div class="board" id="board">${cols}</div>
+  return `<div class="board" id="board">${cols}${addTile}</div>
     <div class="legend small muted"><span class="pill signed">✓ Signed contingency</span><span class="pill built">🏠 Built</span> Lead age: <span class="pill age15">15+ days</span><span class="pill age30">30+ days</span><span class="pill age60">60+ days</span></div>
     ${S.trade==="roofing"?`<div class="legend small muted">Denied claims: ${PATHS.map(p=>pathPill(p[0])).join("")}</div>`:""}
     <p class="small muted" style="margin:10px 0 0">Swipe, or click and drag an empty spot on the board, to see more stages. Drag a column by its ⠿ handle to move it. Drag cards between columns on a computer, or open a job to move it.</p>`;
@@ -1564,7 +1656,7 @@ function renderSheet(){
   el.innerHTML = `<div class="sheet" role="dialog" aria-label="${esc(j.name)}">
     <div class="sheethead">
       <div class="rowtop"><button class="back" data-act="close" aria-label="Back to board">‹ Back</button><div class="jn">${esc(j.name||"No name")}</div><div class="tr">${esc(tradeName(j.trade))}${j.lost?" · Lost":""}</div></div>
-      ${!can("money")?`<div class="hero"><div class="big"><span class="v" style="font-size:28px">${esc(j.lost?"Lost":j.stage)}</span><span class="k">${ageDays(j)} days old</span></div></div>`:""}
+      ${!can("money")?`<div class="hero"><div class="big"><span class="v" style="font-size:28px">${esc(j.lost?"Lost":stageLabel(j.trade,j.stage))}</span><span class="k">${ageDays(j)} days old</span></div></div>`:""}
       <div class="hero" ${can("money")?"":"hidden"}>
         <div class="big"><span class="v num ${c.net<0?"neg":""}">${money(c.net)}</span><span class="k">${c.partner?"your profit":"profit"}</span></div>
         <div class="kv num"><div><span>Contract</span><b>${money(c.contract)}</b></div><div><span>Expenses</span><b>${money(c.expenses)}</b></div><div><span>Balance due</span><b>${money(c.balance)}</b></div></div>
@@ -1589,7 +1681,7 @@ function jobInfo(j){
     <input class="input" id="f-faceNote" data-field="faceNote" maxlength="120" value="${esc(j.faceNote||"")}" placeholder="e.g. Wants metal, wife decides, call after 5">
   </div>
   <div class="panel stack"><h3 class="sec">Stage</h3>
-    <div class="stages" role="group" aria-label="Move to stage">${colOrder(j.trade).map(st=>`<button class="chip${st==="Payment Needed"?" paychip":""}" data-act="stage" data-v="${esc(st)}" aria-pressed="${j.stage===st}">${esc(st)}</button>`).join("")}</div>
+    <div class="stages" role="group" aria-label="Move to stage">${colOrder(j.trade).map(st=>`<button class="chip${st==="Payment Needed"?" paychip":""}" data-act="stage" data-v="${esc(st)}" aria-pressed="${j.stage===st}">${esc(stageLabel(j.trade,st))}</button>`).join("")}</div>
     ${j.trade==="roofing" && (j.stage==="Denied" || j.claimPath) ? `<div class="field"><span class="label" style="font-size:12px">Fighting the denial with</span>
       <div class="chips" role="group" aria-label="Denial path">${PATHS.map(([v,l,c])=>`<button class="chip pathchip path-${c}" data-act="setPath" data-v="${esc(v)}" aria-pressed="${j.claimPath===v}">${esc(l)}</button>`).join("")}
       ${j.claimPath?`<button class="chip" data-act="setPath" data-v="">Clear</button>`:""}</div></div>` : ""}
@@ -2126,12 +2218,13 @@ const ACT = {
   copy:async b=>{ try{ await navigator.clipboard.writeText(b.dataset.v); toast("Copied"); }catch(e){ toast(b.dataset.v); } },
   stage:b=>{
     const id=S.openJob, st=b.dataset.v, j=S.jobs[id]; if(!j || j.stage===st) return;
-    mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; if(st==="Built" && !x.builtAt) x.builtAt=Date.now(); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
+    mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; if(st==="Built" && !x.builtAt) x.builtAt=Date.now(); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+stageLabel(x.trade,st)}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
   },
   setPath:b=>setPath(S.openJob, b.dataset.v),
   convertBoard:b=>convertBoard(b.dataset.v),
   scanContract:()=>scanContract(),
   colSort:b=>colSort(b.dataset.v),
+  addColumn:()=>addColumn(S.trade, null),
   editEmployee:b=>editEmployee(b.dataset.id),
   testMyAlarm:async()=>{ const ok=await pushAlert(myTopic(),{title:"Red Hammer CRM test alarm", message:"Reminder alarms are working.", priority:5, tags:"alarm_clock"}); toast(ok?"Test alarm sent":"Couldn't reach the alarm service"); },
   newReminder:b=>newReminder(b.dataset.id || (S.view!=="reminders" || S.openJob ? S.openJob : null)),
@@ -2232,7 +2325,7 @@ const ACT = {
   ptab:b=>{ S.ptab=b.dataset.v; S.openJob=null; render(); window.scrollTo(0,0); },
   forceUpdate:()=>location.replace(location.pathname+"?v="+Date.now()),
 };
-const NEED = {stage:"edit", nextStage:"edit", convertBoard:"edit", scanContract:"files", toggleSigned:"edit", toggleBuilt:"edit", setPath:"edit", ackAttn:"edit", addNote:"edit", logCall:"edit", logEmail:"edit",
+const NEED = {addColumn:"owner", stage:"edit", nextStage:"edit", convertBoard:"edit", scanContract:"files", toggleSigned:"edit", toggleBuilt:"edit", setPath:"edit", ackAttn:"edit", addNote:"edit", logCall:"edit", logEmail:"edit",
   reopen:"edit", addPayPhoto:"payments", addPayment:"payments", makeReceipt:"payments", addExpense:"expenses", estToContract:"money", addPayout:"owner", editPartner:"owner",
   backupJson:"owner", backupCsv:"owner", testAlarm:"owner", editEmployee:"owner", editContact:"owner", subProfile:"owner", quickAdd:"addLeads"};
 document.addEventListener("click", e=>{
@@ -2283,7 +2376,7 @@ document.addEventListener("change", e=>{
   mutateJob(id, x=>{
     x[f]=v;
     if(f==="appointmentAt"){ setTimeout(sweepAlarms, 500); }
-    if(f==="trade"){ if(!STAGES[v].includes(x.stage)) x.stage="Lead"; x.closedAt = x.stage===CLOSED[v] ? (x.closedAt||Date.now()) : null; }
+    if(f==="trade"){ if(!stageList(v).includes(x.stage)) x.stage="Lead"; x.closedAt = x.stage===CLOSED[v] ? (x.closedAt||Date.now()) : null; }
   });
   if(f==="trade"){ S.trade=v; toast("Moved to the "+tradeName(v)+" board"); }
 });
@@ -2327,13 +2420,13 @@ document.addEventListener("input", e=>{
 
 /* drag and drop between columns (computer) */
 document.addEventListener("dragstart", e=>{ const c=e.target.closest?.(".card"); if(c){ e.dataTransfer.setData("text/plain", c.dataset.id); e.dataTransfer.effectAllowed="move"; } });
-document.addEventListener("dragover", e=>{ const col=e.target.closest?.(".col"); if(col){ e.preventDefault(); document.querySelectorAll(".col.over").forEach(x=>x!==col&&x.classList.remove("over")); col.classList.add("over"); } });
+document.addEventListener("dragover", e=>{ const col=e.target.closest?.(".col[data-stage]"); if(col){ e.preventDefault(); document.querySelectorAll(".col.over").forEach(x=>x!==col&&x.classList.remove("over")); col.classList.add("over"); } });
 document.addEventListener("dragleave", e=>{ const col=e.target.closest?.(".col"); if(col && !col.contains(e.relatedTarget)) col.classList.remove("over"); });
 document.addEventListener("drop", e=>{
-  const col=e.target.closest?.(".col"); if(!col) return; e.preventDefault(); col.classList.remove("over");
+  const col=e.target.closest?.(".col[data-stage]"); if(!col) return; e.preventDefault(); col.classList.remove("over");
   const id=e.dataTransfer.getData("text/plain"), st=col.dataset.stage, j=S.jobs[id]; if(!j||j.stage===st) return;
   if(!can("edit")){ toast("You don't have access to that"); return; }
-  mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; if(st==="Built" && !x.builtAt) x.builtAt=Date.now(); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
+  mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; if(st==="Built" && !x.builtAt) x.builtAt=Date.now(); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+stageLabel(x.trade,st)}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
 });
 
 /* dragging a card near the board's left or right edge scrolls the board, so far columns are reachable */
@@ -2346,7 +2439,7 @@ document.addEventListener("dragover", e=>{
 /* click and drag the board to scroll it (mouse), and drag a column by its header or ⠿ handle to reorder */
 (()=>{
   let pan=null, mv=null, raf=0;
-  const cols = () => [...document.querySelectorAll("#board .col")];
+  const cols = () => [...document.querySelectorAll("#board .col[data-stage]")];
   const clearMarks = () => cols().forEach(c=>c.classList.remove("drop-before","drop-after"));
   function edgeScroll(){
     raf=0; if(!mv) return; const b=$("#board"); if(!b) return;
@@ -2377,7 +2470,7 @@ document.addEventListener("dragover", e=>{
       mv.x=e.clientX;
       if(!mv.on){ if(Math.hypot(e.clientX-mv.x0, e.clientY-mv.y0) < 6) return;
         mv.on=true; mv.col.classList.add("lifted"); $("#board")?.classList.add("moving");
-        mv.ghost=document.createElement("div"); mv.ghost.className="colghost"; mv.ghost.textContent=mv.stage; document.body.appendChild(mv.ghost); }
+        mv.ghost=document.createElement("div"); mv.ghost.className="colghost"; mv.ghost.textContent=stageLabel(S.trade, mv.stage); document.body.appendChild(mv.ghost); }
       e.preventDefault();
       mv.ghost.style.left=e.clientX+"px"; mv.ghost.style.top=e.clientY+"px";
       markTarget(); if(!raf) raf=requestAnimationFrame(edgeScroll);
@@ -2397,7 +2490,7 @@ document.addEventListener("dragover", e=>{
       if(m.on && m.target && e && e.type==="pointerup"){
         const order=colOrder(S.trade).filter(st=>st!==m.stage);
         let i=order.indexOf(m.target.stage); if(i<0) return; if(m.target.after) i++;
-        order.splice(i,0,m.stage); saveColOrder(S.trade, order); toast("Moved "+m.stage);
+        order.splice(i,0,m.stage); saveColOrder(S.trade, order); toast("Moved "+stageLabel(S.trade, m.stage));
       }
       if(m.on){ const stop=ev=>{ ev.stopPropagation(); ev.preventDefault(); }; window.addEventListener("click", stop, {capture:true, once:true}); setTimeout(()=>window.removeEventListener("click", stop, {capture:true}), 50); }
     }
