@@ -90,6 +90,18 @@ main{padding:14px 16px calc(90px + env(safe-area-inset-bottom,0px))}
 .colhead .sum ~ .colsort{margin-left:2px}
 .colsort:hover{border-color:var(--line);color:var(--ink)}
 .colsort.on{color:var(--red);border-color:var(--red-tint);background:var(--red-tint)}
+.colgrip{display:inline-flex;align-items:center;justify-content:center;width:26px;height:30px;margin-left:-4px;color:var(--muted);cursor:grab;touch-action:none;border-radius:6px;flex:none}
+.colgrip:hover{color:var(--ink);background:var(--line)}
+.colhead{cursor:grab}
+.colhead button{cursor:pointer}
+.board.panning,.board.panning *{cursor:grabbing!important;user-select:none}
+.board.panning,.board.moving{scroll-snap-type:none}
+.board{cursor:grab}
+.board .card{cursor:pointer}
+.col.lifted{opacity:.45}
+.col.drop-before{box-shadow:-4px 0 0 var(--red)}
+.col.drop-after{box-shadow:4px 0 0 var(--red)}
+.colghost{position:fixed;z-index:80;pointer-events:none;background:var(--surface);border:2px solid var(--red);border-radius:8px;padding:6px 10px;font-family:var(--f-display);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:14px;box-shadow:var(--shadow);transform:translate(-50%,-120%)}
 .col.hotcol .colhead h2,.col.hotcol .colhead .ct{color:var(--a30)}
 .scanpages{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px}
 .scanpages figure{margin:0;position:relative;background:var(--sunk);border-radius:8px;overflow:hidden;aspect-ratio:3/4}
@@ -329,7 +341,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Nov 18 · Hot Lead, sorting, convert, contract scan";
+const APP_VERSION = "Nov 18 · Movable columns, drag to scroll";
 /* per-column sort, chosen with the funnel button on each column; remembered on this device */
 const COL_SORTS = [["","Default (needs attention first)"],["newest","Newest first"],["oldest","Oldest first"],["contact","Last contacted"],["name","Name A to Z"],["amount","Biggest contract"],["appt","Soonest appointment"]];
 const colSortFns = {
@@ -352,6 +364,23 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {auth:{persi
 let session=null;
 try{ const t=localStorage.getItem("rh-trade"); if(t && TRADES.some(x=>x[0]===t)) S.trade=t; }catch(e){}
 S.colSort={}; try{ S.colSort=JSON.parse(localStorage.getItem("rh-colsort")||"{}")||{}; }catch(e){}
+S.colOrderLocal={}; try{ S.colOrderLocal=JSON.parse(localStorage.getItem("rh-colorder")||"{}")||{}; }catch(e){}
+/* column order: the owner's order is saved to the account (every device); employees keep their own on their device */
+function colOrder(trade){
+  const base=STAGES[trade]||[], saved=S.colOrderLocal[trade] || ((S.settings.colOrder||{})[trade]);
+  if(!Array.isArray(saved) || !saved.length) return base.slice();
+  const out=saved.filter(st=>base.includes(st));
+  base.forEach((st,i)=>{ if(!out.includes(st)){ const prev=base.slice(0,i).reverse().find(p=>out.includes(p)); out.splice(prev?out.indexOf(prev)+1:0, 0, st); } });
+  return out;
+}
+function saveColOrder(trade, order){
+  if(S.mode==="owner"){
+    delete S.colOrderLocal[trade];
+    saveSettings({colOrder:{...(S.settings.colOrder||{}), [trade]:order}});
+  } else S.colOrderLocal[trade]=order;
+  try{ localStorage.setItem("rh-colorder", JSON.stringify(S.colOrderLocal)); }catch(e){}
+  render();
+}
 
 /* ---------- helpers ---------- */
 const $ = s => document.querySelector(s);
@@ -845,7 +874,9 @@ function colSort(stage){
   const key=S.trade+"|"+stage, cur=S.colSort[key]||"";
   openModal(`<h2>Sort ${esc(stage)}</h2>
     <div class="chips" role="group" aria-label="Sort order" style="flex-direction:column;align-items:stretch">${COL_SORTS.map(([v,l])=>`<button class="chip" data-sort="${esc(v)}" aria-pressed="${cur===v}" style="text-align:left">${esc(l)}</button>`).join("")}</div>
-    <p class="small muted" style="margin:0">Only this column changes. It's remembered on this device.</p>`, box=>{
+    <p class="small muted" style="margin:0">Only this column changes. It's remembered on this device.</p>
+    <button class="btn ghost small" id="cs-reset" type="button">Put columns back in the original order</button>`, box=>{
+    box.querySelector("#cs-reset").addEventListener("click", ()=>{ saveColOrder(S.trade, STAGES[S.trade].slice()); closeModal(); toast("Columns reset"); });
     box.addEventListener("click", e=>{ const b=e.target.closest("[data-sort]"); if(!b) return;
       if(b.dataset.sort) S.colSort[key]=b.dataset.sort; else delete S.colSort[key];
       try{ localStorage.setItem("rh-colsort", JSON.stringify(S.colSort)); }catch(err){}
@@ -952,7 +983,8 @@ function renderMain(){
   else if(S.dbOk===false) banner = S.dbErr
     ? `<div class="banner"><b>Can't reach your database.</b> Send this message to Claude: <span style="user-select:text">${esc(S.dbErr)}</span></div>`
     : `<div class="banner">You're offline or the connection dropped. Changes may not save until you have signal again.</div>`;
-  if(S.view==="board") m.innerHTML = banner + boardView();
+  const keepX = $("#board") ? $("#board").scrollLeft : 0;
+  if(S.view==="board"){ m.innerHTML = banner + boardView(); const b=$("#board"); if(b && keepX) b.scrollLeft=keepX; }
   else if(S.view==="lost") m.innerHTML = banner + lostView();
   else if(S.view==="reminders") m.innerHTML = banner + remindersView();
   else if(S.view==="profit") m.innerHTML = banner + profitView();
@@ -1260,12 +1292,12 @@ function attentionBox(){
 }
 function boardCols(){
   const jobs = Object.values(S.jobs).filter(j=>j.trade===S.trade && !j.lost);
-  const cols = STAGES[S.trade].map(st=>{
+  const cols = colOrder(S.trade).map(st=>{
     const sk = S.colSort[S.trade+"|"+st] || "";
     const list = jobs.filter(j=>j.stage===st).sort(colSortFns[sk] || (st==="Appointment" ? colSortFns.appt : (a,b)=>attnSort(a,b) || ((b.lastContact||b.createdAt)-(a.lastContact||a.createdAt))));
     const sum = list.reduce((a,j)=>a+n(j.contract),0);
     return `<section class="col${st==="Payment Needed"?" paycol":""}${st==="Hot Lead"?" hotcol":""}" data-stage="${esc(st)}" aria-label="${esc(st)}">
-      <div class="colhead"><h2>${st==="Hot Lead"?"🔥 ":""}${esc(st)}</h2><span class="ct">${list.length}</span>${sum&&can("money")?`<span class="sum num">${money(sum)}</span>`:""}
+      <div class="colhead"><span class="colgrip" title="Drag to move this column" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14"><g fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></g></svg></span><h2>${st==="Hot Lead"?"🔥 ":""}${esc(st)}</h2><span class="ct">${list.length}</span>${sum&&can("money")?`<span class="sum num">${money(sum)}</span>`:""}
         <button class="colsort${sk?" on":""}" data-act="colSort" data-v="${esc(st)}" aria-label="Sort ${esc(st)}${sk?": "+esc((COL_SORTS.find(x=>x[0]===sk)||[])[1]||""):""}" title="Sort this column"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z" fill="${sk?"currentColor":"none"}" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button></div>
       ${list.map(cardHTML).join("") || (st==="Lead" && !jobs.length ? `<div class="empty-col">No ${tradeName(S.trade).toLowerCase()} leads yet. Tap + to add your first one.</div>` : `<div class="empty-col">Nothing here</div>`)}
     </section>`;
@@ -1273,7 +1305,7 @@ function boardCols(){
   return `<div class="board" id="board">${cols}</div>
     <div class="legend small muted"><span class="pill signed">✓ Signed contingency</span><span class="pill built">🏠 Built</span> Lead age: <span class="pill age15">15+ days</span><span class="pill age30">30+ days</span><span class="pill age60">60+ days</span></div>
     ${S.trade==="roofing"?`<div class="legend small muted">Denied claims: ${PATHS.map(p=>pathPill(p[0])).join("")}</div>`:""}
-    <p class="small muted" style="margin:10px 0 0">Swipe for more stages. Drag cards between columns on a computer, or open a job to move it.</p>`;
+    <p class="small muted" style="margin:10px 0 0">Swipe, or click and drag an empty spot on the board, to see more stages. Drag a column by its ⠿ handle to move it. Drag cards between columns on a computer, or open a job to move it.</p>`;
 }
 
 /* ----- lost ----- */
@@ -1557,7 +1589,7 @@ function jobInfo(j){
     <input class="input" id="f-faceNote" data-field="faceNote" maxlength="120" value="${esc(j.faceNote||"")}" placeholder="e.g. Wants metal, wife decides, call after 5">
   </div>
   <div class="panel stack"><h3 class="sec">Stage</h3>
-    <div class="stages" role="group" aria-label="Move to stage">${STAGES[j.trade].map(st=>`<button class="chip${st==="Payment Needed"?" paychip":""}" data-act="stage" data-v="${esc(st)}" aria-pressed="${j.stage===st}">${esc(st)}</button>`).join("")}</div>
+    <div class="stages" role="group" aria-label="Move to stage">${colOrder(j.trade).map(st=>`<button class="chip${st==="Payment Needed"?" paychip":""}" data-act="stage" data-v="${esc(st)}" aria-pressed="${j.stage===st}">${esc(st)}</button>`).join("")}</div>
     ${j.trade==="roofing" && (j.stage==="Denied" || j.claimPath) ? `<div class="field"><span class="label" style="font-size:12px">Fighting the denial with</span>
       <div class="chips" role="group" aria-label="Denial path">${PATHS.map(([v,l,c])=>`<button class="chip pathchip path-${c}" data-act="setPath" data-v="${esc(v)}" aria-pressed="${j.claimPath===v}">${esc(l)}</button>`).join("")}
       ${j.claimPath?`<button class="chip" data-act="setPath" data-v="">Clear</button>`:""}</div></div>` : ""}
@@ -2303,6 +2335,79 @@ document.addEventListener("drop", e=>{
   if(!can("edit")){ toast("You don't have access to that"); return; }
   mutateJob(id, x=>{ x.stage=st; x.closedAt = st===CLOSED[x.trade] ? (x.closedAt||Date.now()) : null; if(st==="Built" && !x.builtAt) x.builtAt=Date.now(); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Moved to "+st}); }); if(st==="Denied" && !j.claimPath) pickPath(id);
 });
+
+/* dragging a card near the board's left or right edge scrolls the board, so far columns are reachable */
+document.addEventListener("dragover", e=>{
+  const b=$("#board"); if(!b || !e.target.closest?.("#board")) return;
+  const r=b.getBoundingClientRect(), edge=70;
+  if(e.clientX < r.left+edge) b.scrollLeft -= 18; else if(e.clientX > r.right-edge) b.scrollLeft += 18;
+});
+
+/* click and drag the board to scroll it (mouse), and drag a column by its header or ⠿ handle to reorder */
+(()=>{
+  let pan=null, mv=null, raf=0;
+  const cols = () => [...document.querySelectorAll("#board .col")];
+  const clearMarks = () => cols().forEach(c=>c.classList.remove("drop-before","drop-after"));
+  function edgeScroll(){
+    raf=0; if(!mv) return; const b=$("#board"); if(!b) return;
+    const r=b.getBoundingClientRect(), edge=80; let d=0;
+    if(mv.x < r.left+edge) d=-Math.ceil((r.left+edge-mv.x)/6); else if(mv.x > r.right-edge) d=Math.ceil((mv.x-(r.right-edge))/6);
+    if(d){ b.scrollLeft+=d; markTarget(); raf=requestAnimationFrame(edgeScroll); }
+  }
+  function markTarget(){
+    clearMarks(); mv.target=null;
+    for(const c of cols()){ const r=c.getBoundingClientRect();
+      if(mv.x>=r.left-6 && mv.x<=r.right+6){ if(c===mv.col) return; const after=mv.x > r.left+r.width/2; c.classList.add(after?"drop-after":"drop-before"); mv.target={stage:c.dataset.stage, after}; return; } }
+  }
+  document.addEventListener("pointerdown", e=>{
+    if(e.button!==0 || S.view!=="board") return;
+    const b=e.target.closest?.("#board"); if(!b) return;
+    const grip=e.target.closest(".colgrip"), head=e.target.closest(".colhead");
+    if(grip || (head && e.pointerType==="mouse" && !e.target.closest("button"))){
+      const col=(grip||head).closest(".col"); if(!col) return;
+      mv={col, stage:col.dataset.stage, x0:e.clientX, y0:e.clientY, x:e.clientX, on:false, target:null, id:e.pointerId};
+      e.preventDefault(); /* no text selection or card drag while moving a column */
+      return;
+    }
+    if(e.pointerType!=="mouse" || e.target.closest(".card,button,a,input,select,textarea,label")) return;
+    pan={b, x0:e.clientX, y0:e.clientY, left:b.scrollLeft, top:window.scrollY, on:false};
+  });
+  window.addEventListener("pointermove", e=>{
+    if(mv && e.pointerId===mv.id){
+      mv.x=e.clientX;
+      if(!mv.on){ if(Math.hypot(e.clientX-mv.x0, e.clientY-mv.y0) < 6) return;
+        mv.on=true; mv.col.classList.add("lifted"); $("#board")?.classList.add("moving");
+        mv.ghost=document.createElement("div"); mv.ghost.className="colghost"; mv.ghost.textContent=mv.stage; document.body.appendChild(mv.ghost); }
+      e.preventDefault();
+      mv.ghost.style.left=e.clientX+"px"; mv.ghost.style.top=e.clientY+"px";
+      markTarget(); if(!raf) raf=requestAnimationFrame(edgeScroll);
+      return;
+    }
+    if(pan){
+      const dx=e.clientX-pan.x0, dy=e.clientY-pan.y0;
+      if(!pan.on){ if(Math.hypot(dx,dy) < 5) return; pan.on=true; pan.b.classList.add("panning"); }
+      pan.b.scrollLeft = pan.left - dx;
+      window.scrollTo(window.scrollX, pan.top - dy);
+    }
+  }, {passive:false});
+  const end = e=>{
+    if(mv && (!e || e.pointerId===mv.id)){
+      const m=mv; mv=null; if(raf){ cancelAnimationFrame(raf); raf=0; }
+      clearMarks(); m.col.classList.remove("lifted"); $("#board")?.classList.remove("moving"); if(m.ghost) m.ghost.remove();
+      if(m.on && m.target && e && e.type==="pointerup"){
+        const order=colOrder(S.trade).filter(st=>st!==m.stage);
+        let i=order.indexOf(m.target.stage); if(i<0) return; if(m.target.after) i++;
+        order.splice(i,0,m.stage); saveColOrder(S.trade, order); toast("Moved "+m.stage);
+      }
+      if(m.on){ const stop=ev=>{ ev.stopPropagation(); ev.preventDefault(); }; window.addEventListener("click", stop, {capture:true, once:true}); setTimeout(()=>window.removeEventListener("click", stop, {capture:true}), 50); }
+    }
+    if(pan){ const p=pan; pan=null; p.b.classList.remove("panning"); }
+  };
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
+  /* a moving column must not also start the browser's own drag of a card */
+  document.addEventListener("dragstart", e=>{ if(mv && mv.on) e.preventDefault(); }, true);
+})();
 
 /* after tapping Call / Email, ask how it went when they come back */
 function checkReturn(){
