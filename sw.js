@@ -1,6 +1,6 @@
 /* Red Hammer CRM offline support: keeps a copy of the app on the device so it opens with no signal.
    Live data (Supabase) and alerts (ntfy) always go to the network and are never cached here. */
-const CACHE = "rh-app-v1";
+const CACHE = "rh-app-v2";
 const SHELL = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
 
 self.addEventListener("install", e => {
@@ -19,7 +19,8 @@ self.addEventListener("fetch", e => {
 
   /* the app page: newest from the network, saved copy if there's no signal (or it takes over 4 seconds) */
   if (r.mode === "navigate" || (u.origin === location.origin && /\/(index\.html)?$/.test(u.pathname))) {
-    const net = fetch(r).then(res => { if (res.ok) { const cp = res.clone(); caches.open(CACHE).then(c => c.put("./index.html", cp)); } return res; });
+    /* no-cache: always ask GitHub for the newest page (it otherwise lets browsers reuse a copy for 10 minutes) */
+    const net = fetch(r.url, {cache: "no-cache", credentials: "same-origin"}).then(res => { if (res.ok) { const cp = res.clone(); caches.open(CACHE).then(c => c.put("./index.html", cp)); } return res; });
     const slow = new Promise(ok => setTimeout(ok, 4000));
     e.respondWith(
       Promise.race([net, slow])

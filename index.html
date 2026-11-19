@@ -343,7 +343,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Nov 18 · Edit, add and delete columns";
+const APP_VERSION = "Nov 19 · Faster updates";
 /* per-column sort, chosen with the funnel button on each column; remembered on this device */
 const COL_SORTS = [["","Default (needs attention first)"],["newest","Newest first"],["oldest","Oldest first"],["contact","Last contacted"],["name","Name A to Z"],["amount","Biggest contract"],["appt","Soonest appointment"]];
 const colSortFns = {
@@ -2664,7 +2664,12 @@ async function checkUpdate(){
 }
 setTimeout(checkUpdate, 3000); setInterval(checkUpdate, 10*60e3);
 /* keep a copy of the app on the device so it opens with no signal */
-try{ if("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(()=>{}); }catch(e){}
+try{ if("serviceWorker" in navigator){
+  navigator.serviceWorker.register("./sw.js", {updateViaCache:"none"}).then(reg=>{
+    /* look for a newer app whenever it comes back to the screen, not just every 10 minutes */
+    document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible"){ reg.update().catch(()=>{}); checkUpdate(); } });
+  }).catch(()=>{});
+} }catch(e){}
 render();
 })();
 </script>
