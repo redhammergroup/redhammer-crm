@@ -104,6 +104,9 @@ main{padding:14px 16px calc(90px + env(safe-area-inset-bottom,0px))}
 .colghost{position:fixed;z-index:80;pointer-events:none;background:var(--surface);border:2px solid var(--red);border-radius:8px;padding:6px 10px;font-family:var(--f-display);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:14px;box-shadow:var(--shadow);transform:translate(-50%,-120%)}
 .col.addcol{min-height:64px;align-items:center;justify-content:center;border:2px dashed var(--line);background:none;color:var(--muted);font-family:var(--f-display);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:14px;cursor:pointer}
 .col.addcol:hover{color:var(--ink);border-color:var(--muted)}
+.pipebar{display:flex;align-items:center;gap:10px;margin:0 0 10px}
+.pipebar label{font-family:var(--f-display);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:13px;color:var(--muted)}
+.pipebar select{flex:1;max-width:340px}
 .col.hotcol .colhead h2,.col.hotcol .colhead .ct{color:var(--a30)}
 .scanpages{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px}
 .scanpages figure{margin:0;position:relative;background:var(--sunk);border-radius:8px;overflow:hidden;aspect-ratio:3/4}
@@ -343,7 +346,7 @@ const NTFY = "https://ntfy.sh/";
 const SUPABASE_URL = "https://muffdeytxkeinsvjikar.supabase.co";
 const SUPABASE_KEY = "sb_publishable_I3tcHupLFIB5q4HzRKczLw_8GHRvGDG";
 const BUCKET = "files";
-const APP_VERSION = "Nov 19 · Faster updates";
+const APP_VERSION = "Nov 19 · Salesman pipelines";
 /* per-column sort, chosen with the funnel button on each column; remembered on this device */
 const COL_SORTS = [["","Default (needs attention first)"],["newest","Newest first"],["oldest","Oldest first"],["contact","Last contacted"],["name","Name A to Z"],["amount","Biggest contract"],["appt","Soonest appointment"]];
 const colSortFns = {
@@ -530,8 +533,24 @@ const PERMS = [
   ["addLeads","Add new leads"],["edit","Edit jobs (stages, details, notes, mark lost)"],
   ["money","See money (prices, expenses, profit, payments)"],["expenses","Add expenses & receipt photos"],
   ["payments","Record customer payments & make receipts"],["files","View & upload documents"],
-  ["lost","See Lost Leads"],["profit","See Profit reports"],["delete","Delete leads forever"]];
-const PRESETS = {Crew:{b_roofing:1,expenses:1,files:1}, Office:{b_roofing:1,b_other:1,addLeads:1,edit:1,money:1,expenses:1,payments:1,files:1,lost:1}, Everything:Object.fromEntries(PERMS.map(p=>[p[0],1]))};
+  ["lost","See Lost Leads"],["profit","See Profit reports"],["delete","Delete leads forever"],
+  ["own","Only sees their own leads (salesman pipeline). Delete requests come to you."]];
+const PRESETS = {Crew:{b_roofing:1,expenses:1,files:1}, Office:{b_roofing:1,b_other:1,addLeads:1,edit:1,money:1,expenses:1,payments:1,files:1,lost:1},
+  Salesman:{b_roofing:1,b_other:1,addLeads:1,edit:1,money:1,expenses:1,payments:1,files:1,lost:1,profit:1,own:1},
+  Everything:Object.fromEntries(PERMS.filter(p=>p[0]!=="own").map(p=>[p[0],1]))};
+/* salesman pipelines: a job belongs to a salesman when job.ownerEmail is their login */
+const isSalesman = () => S.mode==="employee" && !!(S.me && S.me.perms && S.me.perms.own);
+const mineOnly = j => !isSalesman() || String(j.ownerEmail||"").toLowerCase()===myEmail();
+const inPipe = j => S.mode!=="owner" || !S.pipeline ? true : S.pipeline==="__none" ? !j.ownerEmail : String(j.ownerEmail||"").toLowerCase()===S.pipeline;
+const pipeJobs = () => Object.values(S.jobs).filter(inPipe);
+const salesmen = () => (S.employees||[]).filter(e=>e.perms && e.perms.own);
+const repName = email => { const m=String(email||"").toLowerCase(), e=(S.employees||[]).find(x=>String(x.email).toLowerCase()===m); return e ? (e.name||e.email) : m; };
+function loadEmployees(){
+  if(S.mode!=="owner" || S.empLoading || Array.isArray(S.employees)) return;
+  S.empLoading=true;
+  sb.from("employees").select("*").order("name").then(({data,error})=>{ S.empLoading=false; S.employees=error?[]:(data||[]); S.empErr=error?error.message:""; renderSoon(); });
+}
+try{ S.pipeline=localStorage.getItem("rh-pipeline")||""; }catch(e){ S.pipeline=""; }
 const myTrades = () => TRADES.filter(([k])=>can("b_"+k));
 const can = k => S.mode==="owner" || (S.mode==="employee" && !!(S.me && S.me.perms && (S.me.perms[k] || (k==="b_other" && S.me.perms.b_granite))));
 const TONY_DEFAULT = {id:"tony", name:"Tony", pct:15, basis:"profit"};
@@ -1056,7 +1075,7 @@ function renderTop(){
   const titles={lost:"Lost Leads",profit:"Profit",settings:"Settings",reminders:"Reminders"};
   $("#top").innerHTML = `
     <div class="brand"><div class="mark" aria-hidden="true"></div><h1>Red Hammer <span>${S.mode==="employee"?esc((S.me&&S.me.name)||"CRM"):"CRM"}</span></h1><div class="sync">${syncBadge()}</div></div>
-    ${S.view==="board" ? `<div class="trades" role="group" aria-label="Trade">${myTrades().map(([k,l])=>{ const c=Object.values(S.jobs).filter(j=>j.trade===k&&needsAttn(j)).length; return `<button data-act="trade" data-v="${k}" aria-pressed="${S.trade===k}">${l}${c?`<span class="tbadge" aria-label="${c} need attention">${c}</span>`:""}</button>`; }).join("")}</div>`
+    ${S.view==="board" ? `<div class="trades" role="group" aria-label="Trade">${myTrades().map(([k,l])=>{ const c=pipeJobs().filter(j=>j.trade===k&&needsAttn(j)).length; return `<button data-act="trade" data-v="${k}" aria-pressed="${S.trade===k}">${l}${c?`<span class="tbadge" aria-label="${c} need attention">${c}</span>`:""}</button>`; }).join("")}</div>`
       : `<h2 class="viewtitle">${titles[S.view]}</h2>`}`;
 }
 function renderNav(){
@@ -1348,18 +1367,38 @@ function cardHTML(j){
       ${j.trade==="roofing"?pathPill(j.claimPath):""}
       ${j.trade==="other"&&j.jobType?`<span class="pill">${esc(j.jobType)}</span>`:""}
       ${partner?`<span class="pill partner">${esc(partner.name)}</span>`:j.source?`<span class="pill">${esc(srcLabel(j))}</span>`:""}
+      ${S.mode==="owner" && j.ownerEmail && !S.pipeline ? `<span class="pill">👤 ${esc(repName(j.ownerEmail))}</span>`:""}
+      ${j.deleteRequest?`<span class="pill attn">🗑 Delete requested</span>`:""}
       ${c.contract&&can("money")?`<span class="amt num">${money(c.contract)}</span>`:""}
     </span></button>`;
 }
 function boardView(){
   if(!S.ready && S.dbOk!==false) return `<div class="emptybox"><b>Loading your jobs…</b></div>`;
-  return `<div class="searchbar"><input class="input" id="jobSearch" type="search" placeholder="Search name, phone, address, claim #" value="${esc(S.search||"")}" aria-label="Search customers" autocomplete="off"></div>
+  loadEmployees();
+  const reps=salesmen(), assigned=S.mode==="owner" && (reps.length || Object.values(S.jobs).some(j=>j.ownerEmail));
+  if(S.mode==="owner" && S.pipeline && S.pipeline!=="__none" && Array.isArray(S.employees) && !reps.some(e=>String(e.email).toLowerCase()===S.pipeline) && !Object.values(S.jobs).some(j=>String(j.ownerEmail||"").toLowerCase()===S.pipeline)) S.pipeline="";
+  const cnt=fn=>Object.values(S.jobs).filter(j=>!j.lost && fn(j)).length;
+  const pipeBar = assigned ? `<div class="pipebar"><label for="pipeSel">Pipeline</label><select class="input" id="pipeSel">
+      <option value="" ${!S.pipeline?"selected":""}>Everyone (${cnt(()=>true)})</option>
+      ${reps.map(e=>{ const em=String(e.email).toLowerCase(); return `<option value="${esc(em)}" ${S.pipeline===em?"selected":""}>${esc(e.name||e.email)} (${cnt(j=>String(j.ownerEmail||"").toLowerCase()===em)})</option>`; }).join("")}
+      <option value="__none" ${S.pipeline==="__none"?"selected":""}>Not assigned (${cnt(j=>!j.ownerEmail)})</option></select></div>` : "";
+  return `${pipeBar}<div class="searchbar"><input class="input" id="jobSearch" type="search" placeholder="Search name, phone, address, claim #" value="${esc(S.search||"")}" aria-label="Search customers" autocomplete="off"></div>
     <div id="boardArea">${boardArea()}</div>`;
 }
-function boardArea(){ return (S.search||"").trim() ? searchResults() : attentionBox() + boardCols(); }
+function boardArea(){ return (S.search||"").trim() ? searchResults() : deleteRequestsBox() + attentionBox() + boardCols(); }
+function deleteRequestsBox(){
+  if(S.mode!=="owner") return "";
+  const list=Object.values(S.jobs).filter(j=>j.deleteRequest).sort((a,b)=>(a.deleteRequest.at||0)-(b.deleteRequest.at||0));
+  if(!list.length) return "";
+  return `<details class="attnbox" open><summary><span class="pill attn">${list.length}</span> Delete ${list.length===1?"request":"requests"} waiting for you</summary>
+    <div class="list" style="margin-top:6px">${list.map(j=>{ const r=j.deleteRequest; return `<div class="li" style="flex-wrap:wrap">
+      <div class="grow" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer"><div class="t">${esc(j.name||"No name")} <span class="tag">${esc(tradeName(j.trade))}</span></div>
+      <div class="s">${esc(r.by||"Employee")} · ${fdate(r.at)} · ${esc(r.reason||"")}${r.note?": "+esc(r.note):""}</div></div>
+      <button class="btn small danger" data-act="approveDel" data-id="${esc(j.id)}">Approve delete</button><button class="btn small" data-act="denyDel" data-id="${esc(j.id)}">Deny</button></div>`; }).join("")}</div></details>`;
+}
 function searchResults(){
   const q=(S.search||"").trim().toLowerCase(), qd=q.replace(/\D/g,"");
-  const hits=Object.values(S.jobs).filter(j=>{
+  const hits=pipeJobs().filter(j=>{
     const hay=[j.name,j.address,j.email,j.claimNo,j.carrier,j.source,j.jobType].join(" ").toLowerCase();
     return hay.includes(q) || (qd.length>=3 && digits(j.phone).replace(/\D/g,"").includes(qd));
   }).sort((a,b)=>(a.lost-b.lost)||String(a.name).localeCompare(String(b.name)));
@@ -1370,7 +1409,7 @@ function searchResults(){
     ${isOpen(j)?agePill(j):""}</div>`).join("")}</div>`;
 }
 function attentionBox(){
-  const list=Object.values(S.jobs).filter(j=>j.trade===S.trade && needsAttn(j)).sort(attnSort);
+  const list=pipeJobs().filter(j=>j.trade===S.trade && needsAttn(j)).sort(attnSort);
   if(!list.length) return "";
   return `<details class="attnbox" open><summary><span class="pill attn">${list.length}</span> ${list.length===1?"Lead needs":"Leads need"} attention</summary>
     <div class="list" style="margin-top:6px">${list.map(j=>`<div class="li">
@@ -1379,7 +1418,7 @@ function attentionBox(){
     <p class="small muted" style="margin:6px 0 0">Logging a call, email or note also clears it until the next milestone (15, 30, 60 days).</p></details>`;
 }
 function boardCols(){
-  const jobs = Object.values(S.jobs).filter(j=>j.trade===S.trade && !j.lost);
+  const jobs = pipeJobs().filter(j=>j.trade===S.trade && !j.lost);
   const order = colOrder(S.trade);
   /* safety net: a job sitting in a column that no longer exists still shows up */
   jobs.forEach(j=>{ if(j.stage && !order.includes(j.stage)) order.push(j.stage); });
@@ -1403,7 +1442,7 @@ function boardCols(){
 /* ----- lost ----- */
 function lostRows(){
   const q = S.lostQuery.trim().toLowerCase();
-  const list = Object.values(S.jobs).filter(j=>j.lost)
+  const list = pipeJobs().filter(j=>j.lost)
     .filter(j=>!q || [j.name,j.address,j.phone,j.lostReason].join(" ").toLowerCase().includes(q))
     .sort((a,b)=>(b.lostAt||0)-(a.lostAt||0));
   if(!list.length) return `<div class="emptybox"><b>${q?"No matches":"No lost leads"}</b>${q?"Try a different name or number.":"When you mark a job as lost it moves here, with its notes, so you can call back later."}</div>`;
@@ -1411,7 +1450,7 @@ function lostRows(){
     <div class="li"><div class="grow" data-act="open" data-id="${esc(j.id)}" style="cursor:pointer">
       <div class="t">${esc(j.name||"No name")} <span class="tag">${esc(tradeName(j.trade))}</span></div>
       <div class="s">${esc(j.lostReason||"No reason")} · ${fdate(j.lostAt)}${j.phone?" · "+esc(j.phone):""}</div></div>
-      <button class="btn small" data-act="reopen" data-id="${esc(j.id)}">Reopen</button>${can("delete")?`<button class="btn small ghost danger" data-act="removeLead" data-id="${esc(j.id)}" aria-label="Delete forever">🗑</button>`:""}</div>`).join("")}</div>`;
+      <button class="btn small" data-act="reopen" data-id="${esc(j.id)}">Reopen</button>${j.deleteRequest?`<span class="pill attn">Delete requested</span>`:""}${can("delete")||(S.mode==="employee"&&can("edit"))?`<button class="btn small ghost danger" data-act="removeLead" data-id="${esc(j.id)}" aria-label="Delete forever">🗑</button>`:""}</div>`).join("")}</div>`;
 }
 function lostView(){
   return `<div class="stack">
@@ -1455,7 +1494,7 @@ function mcols(vals, fmt, label){
       <span class="mval num">${v?esc(fmt(v)):""}</span><span class="mbar" style="height:${v?Math.max(3,Math.round(v/max*100)):0}%"></span><span class="mlab">${MONTHS[i].slice(0,1)}</span></div>`).join("")}</div>`;
 }
 function leadSourceSection(range, pl){
-  const all = Object.values(S.jobs);
+  const all = pipeJobs();
   const leads = all.filter(j=>inRange(j.createdAt, range));
   const closed = all.filter(j=>!j.lost && isClosed(j) && inRange(j.closedAt||j.updatedAt, range));
   const agg = {};
@@ -1496,7 +1535,7 @@ function leadSourceSection(range, pl){
 }
 function profitView(){
   const {range, label} = profitRange();
-  const all = Object.values(S.jobs);
+  const all = pipeJobs();
   const closed = all.filter(j=>!j.lost && isClosed(j) && inRange(j.closedAt||j.updatedAt, range));
   const open = all.filter(j=>!j.lost && !isClosed(j));
   const tot = closed.reduce((a,j)=>{ const c=calc(j); a.rev+=c.contract; a.exp+=c.expenses; a.cut+=c.cut; a.net+=c.net; return a; },{rev:0,exp:0,cut:0,net:0});
@@ -1556,7 +1595,7 @@ function employeesPanel(){
 function employeesList(){
   if(S.empErr) return `<p class="small muted" style="margin:0">Employees aren't set up yet. Paste employees-setup.sql in Supabase → SQL Editor first.</p>`;
   const list=S.employees||[];
-  return `${list.length?`<div class="list">${list.map(e=>`<div class="li"><div class="grow"><div class="t">${esc(e.name||e.email)} ${e.active?"":`<span class="tag bad">Off</span>`}</div>
+  return `${list.length?`<div class="list">${list.map(e=>`<div class="li"><div class="grow"><div class="t">${esc(e.name||e.email)} ${e.perms&&e.perms.own?`<span class="tag">Salesman</span>`:""} ${e.active?"":`<span class="tag bad">Off</span>`}</div>
     <div class="s">${esc(e.email)} · ${PERMS.filter(p=>e.perms&&e.perms[p[0]]).length} of ${PERMS.length} permissions</div></div><button class="btn small" data-act="editEmployee" data-id="${esc(e.email)}">Edit</button></div>`).join("")}</div>`:`<p class="small muted" style="margin:0">No employees yet.</p>`}
     <button class="btn" data-act="editEmployee" data-id="">+ Add employee</button>`;
 }
@@ -1675,6 +1714,10 @@ function jobInfo(j){
   const ps = S.settings.partners;
   const maps = j.address ? "https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(j.address) : "";
   return `
+  ${j.deleteRequest?(S.mode==="owner"
+    ? `<div class="banner"><b>Delete requested</b> by ${esc(j.deleteRequest.by||"an employee")} (${fdate(j.deleteRequest.at)}): ${esc(j.deleteRequest.reason||"")}${j.deleteRequest.note?". "+esc(j.deleteRequest.note):""}
+        <div class="row" style="margin-top:8px;gap:6px"><button class="btn small danger" data-act="approveDel" data-id="${esc(j.id)}">Approve delete</button><button class="btn small" data-act="denyDel" data-id="${esc(j.id)}">Deny</button></div></div>`
+    : `<div class="banner"><b>Delete requested.</b> Waiting for approval. <button class="btn small" data-act="denyDel" data-id="${esc(j.id)}" style="margin-left:8px">Cancel request</button></div>`):""}
   ${j.lost?`<div class="banner"><b>Lost:</b> ${esc(j.lostReason||"")} (${fdate(j.lostAt)}) <button class="btn small" data-act="reopen" data-id="${esc(j.id)}" style="margin-left:8px">Reopen</button></div>`:""}
   ${can("expenses")&&!can("money")?`<button class="btn primary block" data-act="addExpense">+ Add expense / receipt photo</button>`:""}
   <div class="panel stack" style="gap:6px"><label class="label" for="f-faceNote">Face note · shows on the card</label>
@@ -1729,6 +1772,8 @@ function jobInfo(j){
       <div class="field"><label for="f-claimNo">Claim number</label><input class="input" id="f-claimNo" data-field="claimNo" value="${esc(j.claimNo)}"></div>
     </div>`:""}
     <div class="field"><label for="f-trade">Board</label>${sel("trade",TRADES,j.trade)}</div>
+    ${S.mode==="owner" && (salesmen().length || j.ownerEmail) ? `<div class="field"><label for="f-ownerEmail">Salesman</label>${sel("ownerEmail",[["","Not assigned"],...salesmen().map(e=>[String(e.email).toLowerCase(), e.name||e.email]),...(j.ownerEmail && !salesmen().some(e=>String(e.email).toLowerCase()===String(j.ownerEmail).toLowerCase())?[[j.ownerEmail, repName(j.ownerEmail)]]:[])], String(j.ownerEmail||"").toLowerCase())}</div>`
+      : isSalesman() ? `<p class="small muted" style="margin:0">👤 In your pipeline</p>` : ""}
     ${j.trade==="other"?`<div class="field"><label for="f-jobType">Job type</label>${sel("jobType",[["","Pick one"],...JOB_TYPES,...(j.jobType&&!JOB_TYPES.includes(j.jobType)?[j.jobType]:[])],j.jobType||"")}</div>`:""}
   </div>
   ${j.trade==="roofing"?`<div class="panel stack"><h3 class="sec">Adjuster</h3>
@@ -1911,6 +1956,7 @@ function quickAdd(){
         address:box.querySelector("#qa-address").value.trim(), source: box.querySelector("#qa-source").value, sourceOther: box.querySelector("#qa-source").value==="Other" ? box.querySelector("#qa-other").value.trim() : "",
         partnerId, splitPct:null, splitBasis:"", contract:null, carrier:"", claimNo:"", lost:false, lostReason:"", lostAt:null,
         createdAt:now, updatedAt:now, lastContact:null, closedAt:null, driveFolderId:null,
+        ownerEmail: isSalesman() ? myEmail() : (S.mode==="owner" && S.pipeline && S.pipeline!=="__none" ? S.pipeline : ""),
         notes: note?[{id:rid(), t:now, kind:"note", text:note}]:[], expenses:[], payments:[], docs:[]};
       createJob(j); closeModal(); toast("Lead added");
     });
@@ -2107,12 +2153,13 @@ function makeReceipt(){
   });
 }
 function removeLead(id){
-  const j=S.jobs[id||S.openJob]; if(!j) return; const canDel=can("delete"); if(!canDel && (j.lost||!can("edit"))){ toast("You don't have access to that"); return; }
+  const j=S.jobs[id||S.openJob]; if(!j) return; const canDel=can("delete"), canReq=!canDel && S.mode==="employee" && can("edit"); if(!canDel && !canReq){ toast("You don't have access to that"); return; }
   openModal(`<h2>${j.lost?"Delete forever":"Remove this lead"}</h2><p class="muted" style="margin:0">${esc(j.name||"")}${j.address?" · "+esc(j.address):""}</p>
     <div class="chips">${LOST_REASONS.map((r,i)=>`<button type="button" class="chip" data-pick="r" data-v="${esc(r)}" aria-pressed="${i===0}">${esc(r)}</button>`).join("")}</div>
     <div class="field"><label for="rm-note">Why? (required)</label><textarea class="input" id="rm-note" placeholder="What happened"></textarea></div>
     <div class="stack" style="gap:8px">
       ${(j.lost||!can("edit"))?"":`<button class="btn primary block" id="rm-lost">Move to Lost Leads</button><p class="small muted" style="margin:-4px 0 0">Keeps everything so you can call back later.</p>`}
+      ${canReq?(j.deleteRequest?`<p class="small muted" style="margin:0">Delete forever already requested. Waiting for approval.</p>`:`<button class="btn block danger" id="rm-req" style="border-color:var(--red)">Ask to delete forever</button><p class="small muted" style="margin:-4px 0 0">The owner gets your reason and approves or denies it. Nothing is deleted until then.</p>`):""}
       ${canDel?`<button class="btn block danger" id="rm-del" style="border-color:var(--red)">Delete forever</button><p class="small muted" style="margin:-4px 0 0">For dead files you'll never use. Removes the job, notes, money and files for good. Only the name and reason are kept in a deleted log.</p>`:""}
       <button class="btn ghost" data-act="closeModal">Cancel</button>
     </div>`, box=>{
@@ -2121,6 +2168,11 @@ function removeLead(id){
     box.querySelector("#rm-lost")?.addEventListener("click",()=>{ const x0=reason(); if(!x0) return;
       mutateJob(j.id, x=>{ x.lost=true; x.lostReason=x0.r; x.lostAt=Date.now(); x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"stage",text:"Marked lost: "+x0.r+"\n"+x0.note}); });
       closeModal(); S.openJob=null; render(); toast("Moved to Lost Leads"); });
+    box.querySelector("#rm-req")?.addEventListener("click",()=>{ const x0=reason(); if(!x0) return;
+      const by=(S.me&&S.me.name)||myEmail();
+      mutateJob(j.id, x=>{ x.deleteRequest={by, email:myEmail(), at:Date.now(), reason:x0.r, note:x0.note}; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"system",text:`${by} asked to delete this forever: ${x0.r}\n${x0.note}`}); });
+      if(S.settings.notifyTopic) pushAlert(S.settings.notifyTopic, {title:"Delete request", message:`${by} wants to delete ${j.name||"a lead"} forever: ${x0.r}. ${x0.note}`, priority:4, tags:"wastebasket"});
+      closeModal(); toast("Sent for approval"); });
     box.querySelector("#rm-del")?.addEventListener("click",()=>{ const x0=reason(); if(!x0) return;
       const btn=box.querySelector("#rm-del");
       if(!btn.dataset.sure){ btn.dataset.sure="1"; btn.textContent="Tap again to delete forever"; btn.style.background="var(--red)"; btn.style.color="#fff"; return; }
@@ -2222,6 +2274,13 @@ const ACT = {
   },
   setPath:b=>setPath(S.openJob, b.dataset.v),
   convertBoard:b=>convertBoard(b.dataset.v),
+  approveDel:b=>{ const j=S.jobs[b.dataset.id]; if(!j) return; const r=j.deleteRequest||{};
+    confirmBox("Delete "+(j.name||"this lead")+" forever?", `${r.by||"An employee"} asked: ${r.reason||""}${r.note?". "+r.note:""}. This removes the job, notes, money and files for good.`, "Delete forever", ()=>{
+      const log=[{name:j.name, phone:j.phone, address:j.address, trade:j.trade, reason:r.reason||"", note:(r.note||"")+(r.by?` (requested by ${r.by})`:""), at:Date.now()}, ...(S.settings.deletedLog||[])].slice(0,300); saveSettings({deletedLog:log});
+      if(S.openJob===j.id) S.openJob=null; deleteJobDoc(j.id); toast("Deleted forever"); }); },
+  denyDel:b=>{ const id=b.dataset.id, j=S.jobs[id]; if(!j || !j.deleteRequest) return; const owner=S.mode==="owner";
+    mutateJob(id, x=>{ x.deleteRequest=null; x.notes=x.notes||[]; x.notes.push({id:rid(),t:Date.now(),kind:"system",text: owner?"Delete request denied":"Delete request cancelled"}); });
+    toast(owner?"Request denied. The lead stays.":"Request cancelled"); },
   scanContract:()=>scanContract(),
   colSort:b=>colSort(b.dataset.v),
   addColumn:()=>addColumn(S.trade, null),
@@ -2325,7 +2384,7 @@ const ACT = {
   ptab:b=>{ S.ptab=b.dataset.v; S.openJob=null; render(); window.scrollTo(0,0); },
   forceUpdate:()=>location.replace(location.pathname+"?v="+Date.now()),
 };
-const NEED = {addColumn:"owner", stage:"edit", nextStage:"edit", convertBoard:"edit", scanContract:"files", toggleSigned:"edit", toggleBuilt:"edit", setPath:"edit", ackAttn:"edit", addNote:"edit", logCall:"edit", logEmail:"edit",
+const NEED = {addColumn:"owner", approveDel:"owner", denyDel:"edit", stage:"edit", nextStage:"edit", convertBoard:"edit", scanContract:"files", toggleSigned:"edit", toggleBuilt:"edit", setPath:"edit", ackAttn:"edit", addNote:"edit", logCall:"edit", logEmail:"edit",
   reopen:"edit", addPayPhoto:"payments", addPayment:"payments", makeReceipt:"payments", addExpense:"expenses", estToContract:"money", addPayout:"owner", editPartner:"owner",
   backupJson:"owner", backupCsv:"owner", testAlarm:"owner", editEmployee:"owner", editContact:"owner", subProfile:"owner", quickAdd:"addLeads"};
 document.addEventListener("click", e=>{
@@ -2344,6 +2403,7 @@ document.addEventListener("click", e=>{
 const VIEW_ONLY = new Set(["trade","view","open","close","jtab","period","pfReset","closeModal","modalBg","copy","callStart","emailStart","ptab","forceUpdate","backupCsv","colSort"]);
 document.addEventListener("change", e=>{
   const el=e.target;
+  if(el.id==="pipeSel"){ S.pipeline=el.value; try{ localStorage.setItem("rh-pipeline", S.pipeline); }catch(err){} render(); return; }
   if(el.id==="pf-from"||el.id==="pf-to"){ if(!el.value) return; if(el.id==="pf-from") S.pFrom=el.value; else S.pTo=el.value; render(); return; }
   if(el.id==="srcYear"||el.id==="srcFilter"||el.id==="sp-year"||el.id==="sp-from"||el.id==="sp-to"){ /* view filters, handled below or in their modal */ }
   else if(S.offline){ toast("No signal. That change didn't save."); render(); return; }
@@ -2575,7 +2635,7 @@ function loadAll(){
   return loading;
 }
 const liveOk = () => { S.offline=false; S.ready=true; S.dbOk=true; S.dbErr=""; };
-const takeJobs = rows => { const m={}; (rows||[]).forEach(r=>{ m[r.id]={...r.data, id:r.id}; VER[r.id]=r.updated_at; }); return m; };
+const takeJobs = rows => { const m={}; (rows||[]).forEach(r=>{ const j={...r.data, id:r.id}; if(!mineOnly(j)) return; m[r.id]=j; VER[r.id]=r.updated_at; }); return m; };
 async function loadLive(){
   if(!S.mode || S.offline){
     const email=String(session?.user?.email||"").toLowerCase();
@@ -2610,7 +2670,7 @@ async function loadLive(){
   if(jr.error) throw jr.error;
   const m=takeJobs(jr.data), fix=(jr.data||[]).filter(r=>((partnerFor(m[r.id])||{}).id||null)!==(r.partner_id||null)).map(r=>m[r.id]);
   S.jobs=m; if(st.data && st.data.data) S.settings={...DEFAULT_SETTINGS, ...st.data.data};
-  liveOk(); render();
+  liveOk(); render(); loadEmployees();
   /* Other board renamed stages: old Complete -> In Progress, old Paid -> Complete */
   /* Granite board folded into Retail ("other"): move any granite jobs over, keeping "Granite" as the job type */
   const GR={"Lead":"Lead","Hot Lead":"Lead","Appointment":"Lead","Estimate Sent":"Estimate Sent","Follow-Up":"Estimate Sent","Won":"Won","Installed":"In Progress","Payment Needed":"Payment Needed","Paid":"Complete"};
@@ -2631,7 +2691,10 @@ function subscribe(){
   channel = sb.channel("crm")
     .on("postgres_changes", {event:"*", schema:"public", table:"jobs"}, p=>{
       if(p.eventType==="DELETE"){ delete S.jobs[p.old.id]; delete VER[p.old.id]; }
-      else if(p.new && p.new.data){ S.jobs[p.new.id]={...p.new.data, id:p.new.id}; if(p.new.updated_at) VER[p.new.id]=p.new.updated_at;
+      else if(p.new && p.new.data){ const nj={...p.new.data, id:p.new.id}, prev=S.jobs[p.new.id];
+        if(!mineOnly(nj)){ delete S.jobs[p.new.id]; delete VER[p.new.id]; if(S.openJob===p.new.id) S.openJob=null; renderSoon(); return; }
+        S.jobs[p.new.id]=nj; if(p.new.updated_at) VER[p.new.id]=p.new.updated_at;
+        if(S.mode==="owner" && nj.deleteRequest && !(prev && prev.deleteRequest)) toast(`Delete request from ${nj.deleteRequest.by||"an employee"}: ${nj.name||""}`);
         if(S.mode==="owner" && p.eventType==="INSERT" && p.new.data.submittedBy){ toast(`New appointment from ${p.new.data.submittedBy}: ${p.new.data.name||""}`); sweepAlarms(); } }
       renderSoon();
     })
